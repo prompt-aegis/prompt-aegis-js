@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@prompt-aegis/core": ["packages/core/src/index.ts"],
+      "@prompt-aegis/dom": ["packages/dom/src/index.ts"],
+      "@prompt-aegis/node": ["packages/node/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/src", "packages/*/test", "vitest.config.ts"]
+}

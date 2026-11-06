@@ -1,0 +1,72 @@
+{
+  "name": "@prompt-aegis/dom",
+  "version": "0.1.0",
+  "description": "Browser-side defenses: input guards, DOM honeypots / agent tarpits, hidden-injection scanner, React & Vue bindings.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./react": {
+      "import": {
+        "types": "./dist/react.d.ts",
+        "default": "./dist/react.js"
+      },
+      "require": {
+        "types": "./dist/react.d.cts",
+        "default": "./dist/react.cjs"
+      }
+    },
+    "./vue": {
+      "import": {
+        "types": "./dist/vue.d.ts",
+        "default": "./dist/vue.js"
+      },
+      "require": {
+        "types": "./dist/vue.d.cts",
+        "default": "./dist/vue.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@prompt-aegis/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=17",
+    "vue": ">=3.3"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "vue": "^3.5.0"
+  }
+}
