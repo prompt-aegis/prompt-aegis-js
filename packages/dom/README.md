@@ -1,5 +1,7 @@
 # @prompt-aegis/dom
 
+[![npm](https://img.shields.io/npm/v/@prompt-aegis/dom)](https://www.npmjs.com/package/@prompt-aegis/dom) ![license](https://img.shields.io/badge/license-MIT-blue)
+
 > 瀏覽器端的 LLM 防護：輸入框與表單防護、隱形蜜罐（Honeypot／Tarpit）、隱藏注入掃描、自動化偵測，並提供 React 與 Vue 綁定。
 
 ## 目錄
@@ -32,7 +34,11 @@ npm install @prompt-aegis/dom
 pnpm add @prompt-aegis/dom
 # 或
 yarn add @prompt-aegis/dom
+# 或
+bun add @prompt-aegis/dom
 ```
+
+npm 頁面：<https://www.npmjs.com/package/@prompt-aegis/dom>
 
 `@prompt-aegis/core` 會自動安裝。`react`、`vue` 為選用的 peer dependencies，只在使用對應子路徑時需要。
 

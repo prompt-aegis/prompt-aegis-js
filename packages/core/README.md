@@ -1,5 +1,7 @@
 # @prompt-aegis/core
 
+[![npm](https://img.shields.io/npm/v/@prompt-aegis/core)](https://www.npmjs.com/package/@prompt-aegis/core) ![license](https://img.shields.io/badge/license-MIT-blue)
+
 > 零依賴的 LLM 安全核心：隱形字元過濾、提示詞注入偵測與淨化、Spotlighting、模型輸出過濾、AI 爬蟲辨識、Tarpit／Canary 產生。可在瀏覽器、Node.js、Deno、Bun、Edge Workers 中執行。
 
 ## 目錄
@@ -32,7 +34,11 @@ npm install @prompt-aegis/core
 pnpm add @prompt-aegis/core
 # 或
 yarn add @prompt-aegis/core
+# 或
+bun add @prompt-aegis/core
 ```
+
+npm 頁面：<https://www.npmjs.com/package/@prompt-aegis/core>
 
 ## 引入方式
 

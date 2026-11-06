@@ -1,6 +1,6 @@
 {
   "name": "@prompt-aegis/node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Server-side adapters (Express, Koa, Fastify, Fetch/Hono) that sanitize LLM-bound input and serve tarpits to malicious AI scrapers.",
   "license": "MIT",
   "repository": {

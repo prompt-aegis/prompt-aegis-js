@@ -1,5 +1,7 @@
 # @prompt-aegis/node
 
+[![npm](https://img.shields.io/npm/v/@prompt-aegis/node)](https://www.npmjs.com/package/@prompt-aegis/node) ![license](https://img.shields.io/badge/license-MIT-blue)
+
 > 伺服器端 LLM 防護中介層：檢查並淨化送往 LLM 的請求內容、依政策處理 AI 爬蟲、陷阱路徑標記、Tarpit 誘捕回應、robots.txt。支援 Express、Koa、Fastify、Hono，以及任何使用 Fetch API `Request` 的環境（Next.js、Bun、Deno、Cloudflare Workers）。
 
 ## 目錄
@@ -31,7 +33,11 @@ npm install @prompt-aegis/node
 pnpm add @prompt-aegis/node
 # 或
 yarn add @prompt-aegis/node
+# 或
+bun add @prompt-aegis/node
 ```
+
+npm 頁面：<https://www.npmjs.com/package/@prompt-aegis/node>
 
 需要 Node.js ≥ 18。本套件不依賴任何框架，各框架只需自行安裝。
 

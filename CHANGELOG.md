@@ -4,6 +4,17 @@
 
 ## [未發佈]
 
+## [0.1.1] — 2026-11-06
+
+### 修正
+
+- **dom**：使用 `"moduleResolution": "node"`（TypeScript 5 的 `node10`）的專案，找不到 `@prompt-aegis/dom/vue` 與 `@prompt-aegis/dom/react` 的型別（`TS2307`）。現在透過 `typesVersions` 支援，並新增測試確認在 `node`、`node16`、`nodenext`、`bundler` 下都能解析。
+
+### 文件
+
+- README 新增完整的安裝方法（npm／pnpm／yarn／Bun、TypeScript 設定、CDN）與六種使用情境（Express、Next.js、Vue 3、React、純 HTML、自己串接 LLM），所有範例都經過實際安裝與執行驗證。
+- 各套件 README 加入 Bun 安裝方式與 npm 連結。
+
 ## [0.1.0] — 2026-11-06
 
 第一個公開版本。
@@ -27,5 +38,6 @@
 - 陷阱路徑依 `Sec-Fetch-*` 判斷是否標記，跨站與子資源請求不會連累真人訪客；標記鍵為 IP + User-Agent。
 - Tarpit 有同時延遲上限（`tarpit.maxConcurrent`）；每個爬蟲、每天的 Canary 都不同；搜尋引擎爬蟲不會看到蜜罐。
 
-[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/v0.1.0...HEAD
+[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/v0.1.1
 [0.1.0]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/v0.1.0
