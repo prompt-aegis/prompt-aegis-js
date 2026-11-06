@@ -377,3 +377,15 @@ export function buildRobotsTxt(options: RobotsTxtOptions = {}): string {
   if (options.append) lines.push(options.append.trim(), '');
   return lines.join('\n');
 }
+
+/**
+ * Classic search-engine crawlers (not AI-training bots). Hidden honeypot text
+ * should not be shown to these: hidden text can count as spam under search
+ * engine guidelines, and these bots honour robots.txt anyway.
+ */
+export const SEARCH_ENGINE_PATTERN =
+  /Googlebot|Google-InspectionTool|Storebot-Google|AdsBot-Google|bingbot|BingPreview|Slurp|DuckDuckBot|Baiduspider|YandexBot|Applebot(?!-Extended)|Sogou|Yeti\/|SeznamBot|Qwantify|PetalBot|NaverBot|Daum/i;
+
+export function isSearchEngine(userAgent: string | null | undefined): boolean {
+  return SEARCH_ENGINE_PATTERN.test(userAgent ?? '');
+}

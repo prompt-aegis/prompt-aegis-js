@@ -77,6 +77,14 @@ export const DEFAULT_RULES: InjectionRule[] = [
     pattern: /\bfrom now on,?\s+(?:you|your|act|respond|always|only)\b/i,
   },
   {
+    id: 'override.ignore-your-rules',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'Asks the model to ignore / bypass *its own* rules ("ignore your guidelines").',
+    pattern:
+      /\b(?:ignore|disregard|forget|bypass|override|abandon)\s+(?:all\s+)?(?:of\s+)?your\s+(?:own\s+)?(?:instructions|rules|guidelines|programming|restrictions|guardrails|safety\s+(?:rules|guidelines)|system\s+prompt|policies)\b/i,
+  },
+  {
     id: 'override.zh-ignore-previous',
     category: 'instruction-override',
     severity: 'high',
@@ -89,8 +97,10 @@ export const DEFAULT_RULES: InjectionRule[] = [
     category: 'role-hijack',
     severity: 'medium',
     description: 'Attempts to reassign the model identity ("you are now…").',
+    // "You are now logged in / able to…" is ordinary UI text, so require a
+    // persona-like continuation.
     pattern:
-      /\byou\s+are\s+(?:now|no\s+longer)\b|\bpretend\s+(?:to\s+be|you\s+are)\b|\byour\s+new\s+(?:role|persona|identity)\b/i,
+      /\byou\s+are\s+now\s+(?:a|an|the|my|DAN|in\s+\w+\s+mode)\b|\byou\s+are\s+no\s+longer\s+(?:bound|restricted|limited|an?\s+(?:AI|assistant|language\s+model))\b|\bpretend\s+(?:to\s+be|you\s+are)\b|\byour\s+new\s+(?:role|persona|identity)\b/i,
   },
   {
     id: 'role.unrestricted-persona',
@@ -101,12 +111,21 @@ export const DEFAULT_RULES: InjectionRule[] = [
       /\b(?:act|behave|respond|answer|roleplay|role-play)\s+(?:as|like)\s+(?:if\s+you\s+(?:are|were)\s+)?(?:an?\s+)?(?:unrestricted|unfiltered|uncensored|jailbroken|evil|amoral|unaligned|unbound)/i,
   },
   {
-    id: 'jailbreak.known-modes',
+    id: 'jailbreak.dan',
     category: 'jailbreak',
     severity: 'high',
-    description: 'Known jailbreak personas / modes (DAN, developer mode, …).',
+    description: 'The "DAN / Do Anything Now" persona being invoked (not merely discussed).',
     pattern:
-      /\bdo\s+anything\s+now\b|\b(?:developer|god|jailbreak|unrestricted|sudo)\s+mode\b|\bjailbr(?:ea|o)k(?:en|ed|ing)?\b|\bDAN\s+(?:mode|prompt|\d)/i,
+      /\bdo\s+anything\s+now\b|\byou\s+are\s+(?:now\s+)?DAN\b|\bDAN\s+(?:mode\s+(?:enabled|activated|on)|can\b|has\b|will\b|must\b)/i,
+  },
+  {
+    // Medium on its own: "enable developer mode on Android" is a normal question.
+    id: 'jailbreak.mode-switch',
+    category: 'jailbreak',
+    severity: 'medium',
+    description: 'Asks the model to switch into a "developer / god / jailbreak" mode.',
+    pattern:
+      /\b(?:enter|enable|activate|switch\s+(?:in)?to|turn\s+on|you\s+are\s+(?:now\s+)?in)\s+(?:the\s+)?(?:developer|god|jailbreak|unrestricted|sudo|DAN)\s+mode\b/i,
   },
   {
     id: 'jailbreak.no-restrictions',
@@ -122,7 +141,14 @@ export const DEFAULT_RULES: InjectionRule[] = [
     severity: 'high',
     description: '中文：越獄、開發者模式或「不受限制」角色。',
     pattern:
-      /(?:你現在是|你现在是|從現在開始|从现在开始|扮演|假裝|假装)[^。\n]{0,20}(?:沒有限制|没有限制|不受限制|無限制|无限制|越獄|越狱|開發者模式|开发者模式|沒有道德|没有道德)|越獄模式|越狱模式|開發者模式|开发者模式/,
+      /(?:你現在是|你现在是|從現在開始|从现在开始|扮演|假裝|假装)[^。\n]{0,20}(?:沒有限制|没有限制|不受限制|無限制|无限制|越獄|越狱|開發者模式|开发者模式|沒有道德|没有道德)/,
+  },
+  {
+    id: 'jailbreak.zh-mode',
+    category: 'jailbreak',
+    severity: 'medium',
+    description: '中文：提到越獄模式／開發者模式（單獨出現時可能只是一般問題）。',
+    pattern: /越獄模式|越狱模式|(?:進入|进入|啟用|启用|切換到|切换到)(?:開發者|开发者|上帝)模式/,
   },
   {
     id: 'jailbreak.zh-no-restrictions',
@@ -176,10 +202,13 @@ export const DEFAULT_RULES: InjectionRule[] = [
   {
     id: 'delimiter.fake-turn',
     category: 'delimiter-injection',
-    severity: 'medium',
+    // Low on its own: "System: Ubuntu 22.04" is common in bug reports.
+    severity: 'low',
     description: 'Line that impersonates a conversation turn ("System:", "### Assistant").',
+    // Every quantifier is separated by a literal so the engine cannot split
+    // one whitespace run several ways (the old \s{2,}\s* form was O(n³)).
     pattern:
-      /(?:^|\n|\s{2,})\s*(?:#{1,6}\s*|\*\*)?(?:system|assistant|developer)\s*(?:\*\*)?\s*:\s*\S/i,
+      /(?:^|\n)[ \t]*(?:#{1,6}[ \t]*|\*\*)?(?:system|assistant|developer)(?:\*\*)?[ \t]*:[ \t]*\S/i,
   },
   // ── Exfiltration / tool abuse ──────────────────────────────────────────
   {
@@ -187,15 +216,20 @@ export const DEFAULT_RULES: InjectionRule[] = [
     category: 'exfiltration',
     severity: 'medium',
     description: 'Markdown image whose URL carries query data (classic exfil channel).',
-    pattern: /!\[[^\]]*\]\(\s*https?:\/\/[^)\s]+\?[^)\s]*=[^)\s]*\)/i,
+    // Host part excludes "?" and the query part excludes "=" so each
+    // segment has exactly one way to match (old form was O(n²) on "????").
+    pattern: /!\[[^\]\n]{0,200}\]\([ \t]*https?:\/\/[^)\s?]+\?[^)\s=]*=[^)\s]*\)/i,
   },
   {
     id: 'exfil.send-data',
     category: 'exfiltration',
     severity: 'high',
-    description: 'Instruction to send conversation / data to an external party.',
+    // Objects are limited to things an attacker wants (conversation, secrets);
+    // "email the data to finance" is ordinary business language.
+    description:
+      'Instruction to send the conversation, secrets or credentials to an external party.',
     pattern:
-      /\b(?:send|post|upload|forward|transmit|exfiltrate|leak|email)\s+(?:(?:this|the|all|any|your|my|these|of|our|user'?s?)\s+){0,3}(?:[a-z]+\s+)?(?:data|conversation|chat|history|information|credentials?|secrets?|api\s+keys?|tokens?|passwords?|cookies?)\b[^.\n]{0,30}\b(?:to|into)\b/i,
+      /\b(?:send|post|upload|forward|transmit|exfiltrate|leak|email)\s+(?:(?:this|the|all|any|your|my|these|of|our|user'?s?)\s+){0,3}(?:[a-z]+\s+)?(?:conversation|chat(?:\s+(?:log|history))?|history|credentials?|secrets?|api\s+keys?|access\s+tokens?|tokens?|passwords?|cookies?|session|system\s+prompt)\b[^.\n]{0,30}\b(?:to|into)\b/i,
   },
   {
     id: 'tool.dangerous-command',

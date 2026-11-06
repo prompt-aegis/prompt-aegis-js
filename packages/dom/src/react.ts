@@ -9,12 +9,13 @@ import {
   type RefObject,
 } from 'react';
 import {
+  isSearchEngine,
   sanitizeModelOutput,
   type SanitizeOutputOptions,
   type TarpitOptions,
 } from '@prompt-aegis/core';
 import { detectAutomation, type AutomationSignals } from './automation';
-import { guardInput, type GuardInputOptions, type GuardTarget } from './guard';
+import { guardInput, liveGuardOptions, type GuardInputOptions, type GuardTarget } from './guard';
 import { buildHoneypotSpec, type HoneypotTrapEvent } from './honeypot';
 
 /** Attach `guardInput` to a ref'd input / textarea / contenteditable. */
@@ -27,11 +28,12 @@ export function useAegisGuard<T extends GuardTarget>(
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    return guardInput(el, {
-      ...opts.current,
-      onDetect: (e) => opts.current.onDetect?.(e),
-      onBlock: (e) => opts.current.onBlock?.(e),
-    });
+    // Live options: changing props (e.g. blockPasteAt) takes effect immediately
+    // without tearing down listeners.
+    return guardInput(
+      el,
+      liveGuardOptions(() => opts.current),
+    );
   }, [ref]);
 }
 
@@ -43,13 +45,27 @@ export interface AegisHoneypotProps extends TarpitOptions {
   seed?: string | number;
   trapPath?: string;
   onTrap?: (event: HoneypotTrapEvent) => void;
+  /** Remove the honeypot for search-engine crawlers after mount. Default `true`. */
+  skipSearchEngines?: boolean;
 }
 
 const toCamel = (k: string) => k.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 
 /** Invisible tarpit / canary block. SSR-safe when `seed` is given. */
-export function AegisHoneypot(props: AegisHoneypotProps): ReactElement {
-  const { onTrap, ...rest } = props;
+export function AegisHoneypot(props: AegisHoneypotProps): ReactElement | null {
+  const { onTrap, skipSearchEngines = true, ...rest } = props;
+  // Render on the server/first paint (so non-JS scrapers see it), then remove
+  // for search-engine renderers (hidden text can count as spam for SEO).
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => {
+    if (
+      skipSearchEngines &&
+      typeof navigator !== 'undefined' &&
+      isSearchEngine(navigator.userAgent)
+    ) {
+      setHidden(true);
+    }
+  }, [skipSearchEngines]);
   const spec = useMemo(
     () => buildHoneypotSpec(rest),
     [rest.seed, rest.canary, rest.trapPath, rest.paragraphs, rest.notice],
@@ -58,6 +74,7 @@ export function AegisHoneypot(props: AegisHoneypotProps): ReactElement {
     Object.entries(spec.style).map(([k, v]) => [toCamel(k), v]),
   ) as CSSProperties;
   const { payload } = spec;
+  if (hidden) return null;
   return createElement(
     'div',
     {

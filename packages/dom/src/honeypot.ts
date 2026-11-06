@@ -1,4 +1,9 @@
-import { buildTarpitPayload, type TarpitOptions, type TarpitPayload } from '@prompt-aegis/core';
+import {
+  buildTarpitPayload,
+  isSearchEngine,
+  type TarpitOptions,
+  type TarpitPayload,
+} from '@prompt-aegis/core';
 
 export const HONEYPOT_ATTR = 'data-aegis-honeypot';
 
@@ -37,6 +42,12 @@ export interface HoneypotOptions extends TarpitOptions {
   trapPath?: string;
   /** Called when automation interacts with a trap. */
   onTrap?: (event: HoneypotTrapEvent) => void;
+  /**
+   * Do nothing when the page is rendered by a search-engine crawler
+   * (Googlebot, Bingbot …). Hidden text can be treated as spam by search
+   * engines, and those crawlers honour robots.txt anyway. Default `true`.
+   */
+  skipSearchEngines?: boolean;
 }
 
 export interface HoneypotHandle {
@@ -76,6 +87,17 @@ export function injectHoneypot(options: HoneypotOptions = {}): HoneypotHandle {
   const doc = options.target?.ownerDocument ?? document;
   const target = options.target ?? doc.body;
   const spec = buildHoneypotSpec(options);
+
+  const ua = doc.defaultView?.navigator.userAgent;
+  if ((options.skipSearchEngines ?? true) && isSearchEngine(ua)) {
+    // Detached element so callers can treat the handle uniformly.
+    return {
+      element: doc.createElement('div'),
+      payload: spec.payload,
+      canary: spec.payload.canary,
+      remove() {},
+    };
+  }
 
   const root = doc.createElement('div');
   for (const [k, v] of Object.entries(spec.attrs)) root.setAttribute(k, v);

@@ -41,6 +41,22 @@ export interface ScanOptions {
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD']);
 
+const isTransparent = (c: string) => !c || c === 'transparent' || /^rgba\(.*,0\)$/.test(c);
+
+/**
+ * The colour actually painted behind `el`: its own background, else the
+ * nearest ancestor's, else the canvas (white). Text is usually hidden by
+ * matching a *parent's* background, not its own.
+ */
+function effectiveBackground(el: Element): string {
+  const view = el.ownerDocument.defaultView!;
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    const bg = parseColor(view.getComputedStyle(cur).backgroundColor);
+    if (!isTransparent(bg)) return bg;
+  }
+  return 'rgb(255,255,255)';
+}
+
 function parseColor(c: string): string {
   return c.replace(/\s+/g, '').toLowerCase();
 }
@@ -75,13 +91,7 @@ export function hiddenReasons(
     ) {
       reasons.push('clipped');
     }
-    if (
-      cur === el &&
-      s.color &&
-      s.backgroundColor &&
-      parseColor(s.color) === parseColor(s.backgroundColor) &&
-      !/transparent|rgba\(0,0,0,0\)/.test(parseColor(s.backgroundColor))
-    ) {
+    if (cur === el && s.color && parseColor(s.color) === effectiveBackground(el)) {
       reasons.push('same-color');
     }
   }

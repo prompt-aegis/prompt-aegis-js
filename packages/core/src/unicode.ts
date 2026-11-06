@@ -25,7 +25,7 @@ export interface StripInvisibleOptions {
   categories?: InvisibleCategory[];
   /**
    * Keep ZWJ (U+200D) when it sits between two emoji/pictographs so that
-   * composite emoji such as 👨‍👩‍👧 survive. Default `true`.
+   * composite emoji such as 👨\u200D👩\u200D👧 survive. Default `true`.
    */
   preserveEmojiZwj?: boolean;
   /**
@@ -188,5 +188,93 @@ function isPictographicOrModifier(ch: string): boolean {
  * ligatures, circled letters, mathematical alphanumerics, etc.
  */
 export function normalizeForMatching(text: string): string {
-  return text.normalize('NFKC');
+  return foldConfusables(text.normalize('NFKC'));
+}
+
+/**
+ * Cyrillic / Greek letters that render identically to Latin ones. NFKC does
+ * not fold these, so "іgnore" (Cyrillic і) would slip past English rules.
+ * Folding is only used for *matching*; output text is never rewritten with it
+ * unless a redaction requires it.
+ */
+const CONFUSABLES: Record<string, string> = {
+  // Cyrillic lower
+  а: 'a',
+  в: 'b',
+  е: 'e',
+  ё: 'e',
+  һ: 'h',
+  і: 'i',
+  ї: 'i',
+  ј: 'j',
+  к: 'k',
+  ӏ: 'l',
+  м: 'm',
+  н: 'h',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  т: 't',
+  у: 'y',
+  х: 'x',
+  ѕ: 's',
+  ԁ: 'd',
+  ԛ: 'q',
+  ԝ: 'w',
+  ү: 'y',
+  // Cyrillic upper
+  А: 'A',
+  В: 'B',
+  Е: 'E',
+  К: 'K',
+  М: 'M',
+  Н: 'H',
+  О: 'O',
+  Р: 'P',
+  С: 'C',
+  Т: 'T',
+  Х: 'X',
+  І: 'I',
+  Ј: 'J',
+  Ѕ: 'S',
+  Ү: 'Y',
+  // Greek
+  α: 'a',
+  ε: 'e',
+  ι: 'i',
+  κ: 'k',
+  ν: 'v',
+  ο: 'o',
+  ρ: 'p',
+  τ: 't',
+  υ: 'u',
+  χ: 'x',
+  ϲ: 'c',
+  Α: 'A',
+  Β: 'B',
+  Ε: 'E',
+  Ζ: 'Z',
+  Η: 'H',
+  Ι: 'I',
+  Κ: 'K',
+  Μ: 'M',
+  Ν: 'N',
+  Ο: 'O',
+  Ρ: 'P',
+  Τ: 'T',
+  Υ: 'Y',
+  Χ: 'X',
+};
+const CONFUSABLE_RE = new RegExp(`[${Object.keys(CONFUSABLES).join('')}]`, 'g');
+const LATIN_RE = /[A-Za-z]/;
+
+/**
+ * Fold look-alike letters to Latin, but only inside words that also contain
+ * Latin letters (mixed-script words are the attack). Pure Cyrillic / Greek
+ * words are left alone so real Russian or Greek text is not mangled.
+ */
+export function foldConfusables(text: string): string {
+  return text.replace(/[\p{L}\p{M}]+/gu, (word) =>
+    LATIN_RE.test(word) ? word.replace(CONFUSABLE_RE, (c) => CONFUSABLES[c] ?? c) : word,
+  );
 }

@@ -5,7 +5,7 @@ import {
   type DetectionResult,
   type RiskLevel,
 } from './detect';
-import { stripInvisible, type StripInvisibleOptions } from './unicode';
+import { normalizeForMatching, stripInvisible, type StripInvisibleOptions } from './unicode';
 
 export type SanitizeMode =
   /** Only strip invisibles / neutralise tokens; report detections. */
@@ -96,17 +96,39 @@ export function sanitizePrompt(input: string, options: SanitizeOptions = {}): Sa
   if (mode !== 'detect') {
     const minRank = SEVERITY_RANK[options.redactSeverity ?? 'high'];
     const placeholder = options.redactWith ?? '[filtered]';
-    let redacted = 0;
-    for (const rule of resolveRules(options)) {
-      if (SEVERITY_RANK[rule.severity] < minRank || rule.category === 'special-token') continue;
-      const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace(/[gy]/g, '') + 'g');
-      text = text.replace(re, (m) => {
-        if (!m) return m;
-        redacted++;
-        return placeholder;
-      });
+    const rules = resolveRules(options).filter(
+      (r) => SEVERITY_RANK[r.severity] >= minRank && r.category !== 'special-token',
+    );
+    const redactAll = (input: string) => {
+      let count = 0;
+      let out = input;
+      for (const rule of rules) {
+        const re = new RegExp(rule.pattern.source, rule.pattern.flags.replace(/[gy]/g, '') + 'g');
+        out = out.replace(re, (m) => {
+          if (!m) return m;
+          count++;
+          return placeholder;
+        });
+      }
+      return { out, count };
+    };
+
+    let { out, count } = redactAll(text);
+    // Detection matches on folded text (NFKC + homoglyphs). If it found a
+    // redactable phrase that the raw text hid (full-width / Cyrillic letters),
+    // redact on the folded text instead — changing the text is the lesser evil.
+    const detectedRedactable = detection.matches.some((m) => rules.some((r) => r.id === m.ruleId));
+    if (count === 0 && detectedRedactable) {
+      const folded = redactAll(normalizeForMatching(text));
+      if (folded.count > 0) {
+        ({ out, count } = folded);
+        actions.push('normalised obfuscated text (NFKC + homoglyphs) to redact it');
+      } else {
+        actions.push('detected phrase could not be redacted');
+      }
     }
-    if (redacted > 0) actions.push(`redacted ${redacted} injection phrase(s)`);
+    text = out;
+    if (count > 0) actions.push(`redacted ${count} injection phrase(s)`);
   }
 
   if (options.maxLength !== undefined && text.length > options.maxLength) {

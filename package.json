@@ -14,7 +14,9 @@
     "typecheck": "pnpm -r run build && pnpm -r run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "release": "pnpm build && pnpm test && pnpm -r publish --access public",
+    "release:dry": "pnpm build && pnpm -r publish --dry-run --no-git-checks"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

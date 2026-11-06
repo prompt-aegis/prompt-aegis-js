@@ -1,24 +1,32 @@
-import { computed, defineComponent, h, type Directive, type PropType } from 'vue';
+import { computed, defineComponent, h, onMounted, ref, type Directive, type PropType } from 'vue';
+import { isSearchEngine } from '@prompt-aegis/core';
 import type { HoneypotTrapEvent } from './honeypot';
 import { buildHoneypotSpec } from './honeypot';
-import { guardInput, type GuardInputOptions } from './guard';
+import { guardInput, liveGuardOptions, type GuardInputOptions } from './guard';
 
 const DISPOSE = Symbol('aegis-dispose');
-type Guarded = HTMLElement & { [DISPOSE]?: () => void };
+const OPTIONS = Symbol('aegis-options');
+type Guarded = HTMLElement & { [DISPOSE]?: () => void; [OPTIONS]?: GuardInputOptions };
 
-/** `v-aegis-guard="{ onDetect, blockPasteAt }"` */
+/**
+ * `v-aegis-guard="{ onDetect, blockPasteAt }"`. Options are read live, so an
+ * inline object literal does not re-bind listeners on every render.
+ */
 export const vAegisGuard: Directive<Guarded, GuardInputOptions | undefined> = {
   mounted(el, binding) {
-    el[DISPOSE] = guardInput(el, binding.value ?? {});
+    el[OPTIONS] = binding.value ?? {};
+    el[DISPOSE] = guardInput(
+      el,
+      liveGuardOptions(() => el[OPTIONS]),
+    );
   },
   updated(el, binding) {
-    if (binding.value === binding.oldValue) return;
-    el[DISPOSE]?.();
-    el[DISPOSE] = guardInput(el, binding.value ?? {});
+    el[OPTIONS] = binding.value ?? {};
   },
   unmounted(el) {
     el[DISPOSE]?.();
     delete el[DISPOSE];
+    delete el[OPTIONS];
   },
 };
 
@@ -31,6 +39,8 @@ export const AegisHoneypot = defineComponent({
     trapPath: { type: String, default: undefined },
     paragraphs: { type: Number, default: undefined },
     notice: { type: [String, Boolean] as PropType<string | false>, default: undefined },
+    /** Remove the honeypot for search-engine crawlers after mount. Default `true`. */
+    skipSearchEngines: { type: Boolean, default: true },
   },
   emits: { trap: (_e: HoneypotTrapEvent) => true },
   setup(props, { emit }) {
@@ -43,7 +53,12 @@ export const AegisHoneypot = defineComponent({
         ...(props.notice !== undefined ? { notice: props.notice } : {}),
       }),
     );
+    const hidden = ref(false);
+    onMounted(() => {
+      if (props.skipSearchEngines && isSearchEngine(navigator.userAgent)) hidden.value = true;
+    });
     return () => {
+      if (hidden.value) return null;
       const { attrs, style, payload } = spec.value;
       return h(
         'div',
