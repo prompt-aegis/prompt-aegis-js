@@ -6,6 +6,7 @@ import {
   aegisHono,
   aegisKoa,
   createAegisEngine,
+  defaultFlagKey,
   MemoryFlagStore,
 } from '../src/index';
 
@@ -64,7 +65,7 @@ describe('engine', () => {
       ip: '1.2.3.4',
     });
     expect(t.action).toBe('tarpit');
-    expect(store.has('ip:1.2.3.4')).toBe(true);
+    expect(store.size).toBe(1);
     const later = await e.inspect({
       method: 'GET',
       path: '/',
@@ -98,7 +99,7 @@ describe('engine', () => {
       method: 'POST',
       path: '/api/chat',
       headers: { 'user-agent': BROWSER },
-      body: { messages: [{ role: 'user', content: 'hel​lo' }], n: 1 },
+      body: { messages: [{ role: 'user', content: 'hel\u200Blo' }], n: 1 },
     });
     expect(ok.action).toBe('next');
     expect(ok.sanitized!.changed).toBe(true);
@@ -184,7 +185,7 @@ describe('adapters', () => {
       method: 'POST',
       url: '/api',
       headers: { 'user-agent': BROWSER },
-      body: { q: 'a​b' },
+      body: { q: 'a\u200Bb' },
     };
     const next = vi.fn();
     await mw(req as never, mockRes() as never, next);
@@ -214,13 +215,33 @@ describe('adapters', () => {
       {
         method: 'GET',
         url: '/__aegis/trap',
-        headers: { 'user-agent': BROWSER, 'x-forwarded-for': '9.9.9.9, 10.0.0.1' },
+        headers: { 'user-agent': BROWSER, 'x-forwarded-for': '9.9.9.9, 203.0.113.50' },
         ip: '10.0.0.1',
       } as never,
       mockRes() as never,
       vi.fn(),
     );
-    expect(store.has('ip:9.9.9.9')).toBe(true);
+    // Right-most entry (added by the trusted proxy) is the client; 9.9.9.9 is spoofable.
+    expect(
+      store.has(
+        defaultFlagKey({
+          method: 'GET',
+          path: '/',
+          headers: { 'user-agent': BROWSER },
+          ip: '203.0.113.50',
+        })!,
+      ),
+    ).toBe(true);
+    expect(
+      store.has(
+        defaultFlagKey({
+          method: 'GET',
+          path: '/',
+          headers: { 'user-agent': BROWSER },
+          ip: '9.9.9.9',
+        })!,
+      ),
+    ).toBe(false);
   });
 
   it('koa: blocks injection', async () => {
@@ -261,7 +282,7 @@ describe('adapters', () => {
       method: 'POST',
       url: '/api',
       headers: { 'user-agent': BROWSER },
-      body: { a: 'x​y' },
+      body: { a: 'x\u200By' },
     };
     await hook!(req, reply);
     expect(req.body).toEqual({ a: 'xy' });
@@ -278,12 +299,12 @@ describe('adapters', () => {
     const req = new Request('https://site.test/api', {
       method: 'POST',
       headers: { 'user-agent': BROWSER, 'content-type': 'application/json' },
-      body: JSON.stringify({ prompt: 'hi​' }),
+      body: JSON.stringify({ prompt: 'hi\u200B' }),
     });
     const r = await inspect(req);
     expect(r.response).toBeUndefined();
     expect(r.body).toEqual({ prompt: 'hi' });
-    expect(await req.json()).toEqual({ prompt: 'hi​' }); // original still readable
+    expect(await req.json()).toEqual({ prompt: 'hi\u200B' }); // original still readable
   });
 
   it('hono: sets context values and short-circuits', async () => {

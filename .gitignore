@@ -1,1 +1,9 @@
 .idea
+/CLAUDE.md
+node_modules
+dist
+coverage
+.pnpm-store
+*.log
+.DS_Store
+dist-packs

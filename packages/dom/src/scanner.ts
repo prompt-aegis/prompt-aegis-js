@@ -1,4 +1,14 @@
 import {
+  COMMENT_NODE,
+  ELEMENT_NODE,
+  FILTER_ACCEPT,
+  FILTER_REJECT,
+  SHOW_COMMENT,
+  SHOW_ELEMENT,
+  SHOW_TEXT,
+  TEXT_NODE,
+} from './dom-constants';
+import {
   detectInjection,
   stripInvisible,
   type DetectOptions,
@@ -41,6 +51,22 @@ export interface ScanOptions {
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD']);
 
+const isTransparent = (c: string) => !c || c === 'transparent' || /^rgba\(.*,0\)$/.test(c);
+
+/**
+ * The colour actually painted behind `el`: its own background, else the
+ * nearest ancestor's, else the canvas (white). Text is usually hidden by
+ * matching a *parent's* background, not its own.
+ */
+function effectiveBackground(el: Element): string {
+  const view = el.ownerDocument.defaultView!;
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    const bg = parseColor(view.getComputedStyle(cur).backgroundColor);
+    if (!isTransparent(bg)) return bg;
+  }
+  return 'rgb(255,255,255)';
+}
+
 function parseColor(c: string): string {
   return c.replace(/\s+/g, '').toLowerCase();
 }
@@ -75,13 +101,7 @@ export function hiddenReasons(
     ) {
       reasons.push('clipped');
     }
-    if (
-      cur === el &&
-      s.color &&
-      s.backgroundColor &&
-      parseColor(s.color) === parseColor(s.backgroundColor) &&
-      !/transparent|rgba\(0,0,0,0\)/.test(parseColor(s.backgroundColor))
-    ) {
+    if (cur === el && s.color && parseColor(s.color) === effectiveBackground(el)) {
       reasons.push('same-color');
     }
   }
@@ -120,28 +140,24 @@ export function scanForHiddenInjections(
       findings.push({ element, text: t, reasons, detection });
   };
 
-  const walker = doc.createTreeWalker(
-    root as Node,
-    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT | NodeFilter.SHOW_COMMENT,
-    {
-      acceptNode(node) {
-        if (node.nodeType === Node.ELEMENT_NODE) {
-          const el = node as Element;
-          if (SKIP_TAGS.has(el.tagName.toUpperCase())) return NodeFilter.FILTER_REJECT;
-          if (skipHoneypots && el.hasAttribute(HONEYPOT_ATTR)) return NodeFilter.FILTER_REJECT;
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      },
+  const walker = doc.createTreeWalker(root as Node, SHOW_ELEMENT | SHOW_TEXT | SHOW_COMMENT, {
+    acceptNode(node) {
+      if (node.nodeType === ELEMENT_NODE) {
+        const el = node as Element;
+        if (SKIP_TAGS.has(el.tagName.toUpperCase())) return FILTER_REJECT;
+        if (skipHoneypots && el.hasAttribute(HONEYPOT_ATTR)) return FILTER_REJECT;
+      }
+      return FILTER_ACCEPT;
     },
-  );
+  });
 
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (node.nodeType === Node.COMMENT_NODE) {
+    if (node.nodeType === COMMENT_NODE) {
       if ((options.comments ?? true) && node.parentElement)
         consider(node.parentElement, node.nodeValue ?? '', ['comment']);
       continue;
     }
-    if (node.nodeType === Node.TEXT_NODE) {
+    if (node.nodeType === TEXT_NODE) {
       const parent = node.parentElement;
       if (!parent) continue;
       const text = node.nodeValue ?? '';
@@ -168,14 +184,12 @@ export function extractVisibleText(root: Element = document.body): string {
   const doc = root.ownerDocument;
   const parts: string[] = [];
   const cache = new WeakMap<Element, HiddenReason[]>();
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+  const walker = doc.createTreeWalker(root, SHOW_TEXT, {
     acceptNode(node) {
       const parent = node.parentElement;
-      if (!parent || SKIP_TAGS.has(parent.tagName.toUpperCase())) return NodeFilter.FILTER_REJECT;
-      if (parent.closest(`[${HONEYPOT_ATTR}]`)) return NodeFilter.FILTER_REJECT;
-      return hiddenReasons(parent, cache).length
-        ? NodeFilter.FILTER_REJECT
-        : NodeFilter.FILTER_ACCEPT;
+      if (!parent || SKIP_TAGS.has(parent.tagName.toUpperCase())) return FILTER_REJECT;
+      if (parent.closest(`[${HONEYPOT_ATTR}]`)) return FILTER_REJECT;
+      return hiddenReasons(parent, cache).length ? FILTER_REJECT : FILTER_ACCEPT;
     },
   });
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm format:check
+      - run: pnpm test
+
+      - name: Attack simulation (defences on)
+        run: pnpm --filter @prompt-aegis/demo-site attack
+
+      - name: Attack simulation (defences off — must fail)
+        shell: bash
+        run: |
+          if pnpm --filter @prompt-aegis/demo-site attack:unprotected; then
+            echo "::error::The attack suite passed even with defences OFF, so it is not actually detecting anything."
+            exit 1
+          fi
+          echo "As expected: attacks get through when defences are off."

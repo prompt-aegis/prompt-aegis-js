@@ -1,6 +1,5 @@
 import {
   createAegisEngine,
-  sleep,
   type AegisDecision,
   type AegisEngine,
   type AegisNodeOptions,
@@ -14,25 +13,46 @@ import {
 export interface AdapterOptions extends AegisNodeOptions {
   /** Reuse an existing engine (shares flag store between adapters). */
   engine?: AegisEngine;
-  /** Take the client IP from `X-Forwarded-For` (only behind a trusted proxy). Default `false`. */
-  trustProxy?: boolean;
+  /**
+   * Derive the client IP from `X-Forwarded-For`. Only enable behind proxies
+   * you control. `true` = one proxy hop; a number = that many trusted hops.
+   * The IP is taken counting from the **right** (entries on the left are
+   * client-controlled and spoofable). Default `false` (socket address).
+   */
+  trustProxy?: boolean | number;
+  /**
+   * Read the client IP from a single header set by your CDN / edge, e.g.
+   * `cf-connecting-ip` (Cloudflare) or `fly-client-ip`. Takes precedence over
+   * `trustProxy`. Only use when every request passes through that CDN.
+   */
+  ipHeader?: string;
 }
 
 function engineFor(options: AdapterOptions): AegisEngine {
   return options.engine ?? createAegisEngine(options);
 }
 
-function clientIp(
+const headerValue = (v: string | string[] | undefined) => (Array.isArray(v) ? v.join(',') : v);
+
+/** Resolve the client IP. Exported for custom integrations and tests. */
+export function resolveClientIp(
   headers: Record<string, string | string[] | undefined>,
-  fallback: string | undefined,
-  trustProxy?: boolean,
-) {
-  if (trustProxy) {
-    const xff = headers['x-forwarded-for'];
-    const first = (Array.isArray(xff) ? xff[0] : xff)?.split(',')[0]?.trim();
-    if (first) return first;
+  socketAddress: string | undefined,
+  options: Pick<AdapterOptions, 'trustProxy' | 'ipHeader'> = {},
+): string | undefined {
+  if (options.ipHeader) {
+    const v = headerValue(headers[options.ipHeader.toLowerCase()])?.split(',')[0]?.trim();
+    if (v) return v;
   }
-  return fallback;
+  if (options.trustProxy) {
+    const hops = options.trustProxy === true ? 1 : Math.max(1, Math.floor(options.trustProxy));
+    const list = (headerValue(headers['x-forwarded-for']) ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (list.length) return list[Math.max(0, list.length - hops)];
+  }
+  return socketAddress;
 }
 
 const stripQuery = (url: string) => url.split('?')[0] || '/';
@@ -72,12 +92,12 @@ export function aegisExpress(options: AdapterOptions = {}) {
         method: req.method,
         path: req.path ?? stripQuery(req.originalUrl ?? req.url),
         headers: req.headers,
-        ip: clientIp(req.headers, req.ip ?? req.socket?.remoteAddress, options.trustProxy),
+        ip: resolveClientIp(req.headers, req.ip ?? req.socket?.remoteAddress, options),
         body: req.body,
       });
       req.aegis = decision;
       if (decision.response) {
-        if (decision.delayMs) await sleep(decision.delayMs);
+        await engine.hold(decision);
         res.status(decision.response.status);
         for (const [k, v] of Object.entries(decision.response.headers)) res.setHeader(k, v);
         res.send(decision.response.body);
@@ -98,6 +118,7 @@ interface KoaCtx {
   path: string;
   headers: Record<string, string | string[] | undefined>;
   ip?: string;
+  req?: { socket?: { remoteAddress?: string } };
   request: { body?: unknown };
   status: number;
   body: unknown;
@@ -113,12 +134,14 @@ export function aegisKoa(options: AdapterOptions = {}) {
       method: ctx.method,
       path: ctx.path,
       headers: ctx.headers,
-      ip: clientIp(ctx.headers, ctx.ip, options.trustProxy),
+      // Koa's ctx.ip uses the left-most (spoofable) X-Forwarded-For entry when
+      // app.proxy is on, so prefer the raw socket address.
+      ip: resolveClientIp(ctx.headers, ctx.req?.socket?.remoteAddress ?? ctx.ip, options),
       body: ctx.request.body,
     });
     ctx.state.aegis = decision;
     if (decision.response) {
-      if (decision.delayMs) await sleep(decision.delayMs);
+      await engine.hold(decision);
       ctx.status = decision.response.status;
       for (const [k, v] of Object.entries(decision.response.headers)) ctx.set(k, v);
       ctx.body = decision.response.body;
@@ -166,12 +189,12 @@ export function aegisFastify(options: AdapterOptions = {}) {
         method: req.method,
         path: stripQuery(req.url),
         headers: req.headers,
-        ip: clientIp(req.headers, req.ip, options.trustProxy),
+        ip: resolveClientIp(req.headers, req.ip, options),
         body: req.body,
       });
       req.aegis = decision;
       if (decision.response) {
-        if (decision.delayMs) await sleep(decision.delayMs);
+        await engine.hold(decision);
         reply.code(decision.response.status);
         for (const [k, v] of Object.entries(decision.response.headers)) reply.header(k, v);
         return reply.send(decision.response.body);
@@ -224,14 +247,14 @@ export function aegisFetch(options: AdapterOptions = {}) {
       method: request.method,
       path: new URL(request.url).pathname,
       headers,
-      ip: clientIp(headers, ctx.ip, options.trustProxy),
+      ip: resolveClientIp(headers, ctx.ip, options),
       body,
     });
     const result: FetchResult = { decision };
     const finalBody = decision.sanitized ? decision.sanitized.body : body;
     if (finalBody !== undefined) result.body = finalBody;
     if (decision.response) {
-      if (decision.delayMs) await sleep(decision.delayMs);
+      await engine.hold(decision);
       result.response = new Response(decision.response.body, {
         status: decision.response.status,
         headers: decision.response.headers,
@@ -251,16 +274,20 @@ interface HonoCtx {
  * Hono middleware. Sanitized body is available as `c.get('aegisBody')`,
  * the decision as `c.get('aegis')`.
  */
-export function aegisHono(options: AdapterOptions = {}) {
+export function aegisHono(
+  options: AdapterOptions & {
+    /** Socket address of the client, e.g. `(c) => getConnInfo(c).remote.address`. */
+    getIp?: (c: HonoCtx) => string | undefined;
+  } = {},
+) {
   const inspect = aegisFetch(options);
   return async function aegisMiddleware(
     c: HonoCtx,
     next: () => Promise<void>,
   ): Promise<Response | void> {
-    // Edge headers are only trustworthy behind the matching proxy/CDN.
-    const ip = options.trustProxy
-      ? (c.req.header('cf-connecting-ip') ?? c.req.header('x-real-ip'))
-      : undefined;
+    // `ipHeader` / `trustProxy` are applied inside aegisFetch; `getIp` supplies
+    // the socket address (e.g. via `getConnInfo` from hono/<runtime>).
+    const ip = options.getIp?.(c);
     const r = await inspect(c.req.raw, ip ? { ip } : {});
     c.set('aegis', r.decision);
     if (r.body !== undefined) c.set('aegisBody', r.body);

@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "description": "Zero-dependency core for LLM prompt-injection sanitization, invisible-Unicode stripping and agent-tarpit payloads.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prompt-aegis/prompt-aegis-js.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/prompt-aegis/prompt-aegis-js/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/prompt-aegis/prompt-aegis-js/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.cjs",
@@ -18,10 +27,12 @@
         "types": "./dist/index.d.cts",
         "default": "./dist/index.cjs"
       }
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "keywords": [
     "llm",
@@ -34,5 +45,8 @@
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
