@@ -127,14 +127,14 @@ detectInjection(text: string, options?: DetectOptions): DetectionResult
 
 **DetectOptions**
 
-| 選項                | 型別              | 預設值          | 說明                       |
-| :------------------ | :---------------- | :-------------- | :------------------------- |
-| `rules`             | `InjectionRule[]` | `DEFAULT_RULES` | 完全取代內建規則           |
-| `extraRules`        | `InjectionRule[]` | `[]`            | 附加規則                   |
-| `disabledRules`     | `string[]`        | `[]`            | 停用的規則 ID              |
-| `maxMatchesPerRule` | `number`          | `5`             | 每條規則最多記錄幾筆命中   |
-| `flagInvisible`     | `boolean`         | `true`          | 是否把隱形字元列為命中項目 |
-| `maxScanLength`     | `number`          | `100000`        | 最多掃描的字元數           |
+| 選項                | 型別              | 預設值                                 | 說明                                                                                                                                          |
+| :------------------ | :---------------- | :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rules`             | `InjectionRule[]` | `DEFAULT_RULES`                        | 完全取代內建規則                                                                                                                              |
+| `extraRules`        | `InjectionRule[]` | `[]`                                   | 附加規則                                                                                                                                      |
+| `disabledRules`     | `string[]`        | `[]`                                   | 停用的規則 ID                                                                                                                                 |
+| `maxMatchesPerRule` | `number`          | `5`                                    | 每條規則最多記錄幾筆命中                                                                                                                      |
+| `flagInvisible`     | `boolean`         | `true`                                 | 是否把隱形字元列為命中項目                                                                                                                    |
+| `maxScanLength`     | `number`          | `1000000`（`DEFAULT_MAX_SCAN_LENGTH`） | 掃描的字元數上限。規則都是線性時間，所以會掃描全文；超過上限時**不會默默放行**，而是加入 high 等級的 `scan.truncated`，`block` 模式下會被阻擋 |
 
 **DetectionResult**
 
@@ -182,7 +182,15 @@ stripInvisible(text: string, options?: StripInvisibleOptions): StripInvisibleRes
 | `preserveEmojiPresentation` | `boolean`             | `true` | 保留 emoji 後方的 VS15／VS16    |
 | `collectFindings`           | `boolean`             | `true` | 是否回傳每個字元的位置資訊      |
 
-**StripInvisibleResult**：`{ text, removed, categories, findings, decodedTagPayload? }`
+**StripInvisibleResult**
+
+| 欄位                | 型別                  | 說明                                                                                |
+| :------------------ | :-------------------- | :---------------------------------------------------------------------------------- |
+| `text`              | `string`              | 清除後的文字                                                                        |
+| `removed`           | `number`              | 移除的字元數                                                                        |
+| `categories`        | `InvisibleCategory[]` | 出現過的類別                                                                        |
+| `findings`          | `InvisibleFinding[]`  | 每個被移除字元的 `{ category, codePoint, index }`（`collectFindings` 為 `true` 時） |
+| `decodedTagPayload` | `string?`             | Tag 字元解碼後的 ASCII 內容，通常就是被夾帶的隱藏指令，適合記錄與告警               |
 
 ```ts
 const r = stripInvisible('ig\u200Bnore');
@@ -286,6 +294,29 @@ classifyUserAgent(userAgent: string | null | undefined, options?: ClassifyOption
 
 完整清單見匯出的 `AI_BOT_SIGNATURES` 與 `AUTOMATION_SIGNATURES`。
 
+**BotSignature**（用於 `extraSignatures`）
+
+| 欄位          | 型別          | 說明                                                     |
+| :------------ | :------------ | :------------------------------------------------------- |
+| `name`        | `string`      | 爬蟲名稱                                                 |
+| `operator`    | `string`      | 營運者                                                   |
+| `category`    | `BotCategory` | 分類                                                     |
+| `pattern`     | `RegExp`      | 比對 User-Agent 的正規式                                 |
+| `robotsToken` | `string?`     | robots.txt 中使用的名稱；有值時才會納入 `buildRobotsTxt` |
+
+```ts
+classifyUserAgent(ua, {
+  extraSignatures: [
+    {
+      name: 'MyCorpCrawler',
+      operator: 'MyCorp',
+      category: 'ai-training',
+      pattern: /MyCorpCrawler/i,
+    },
+  ],
+});
+```
+
 ```ts
 classifyUserAgent('Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)');
 // { isBot: true, category: 'ai-training', name: 'GPTBot', operator: 'OpenAI', missingUserAgent: false }
@@ -365,6 +396,18 @@ createAegis(config?: AegisConfig): Aegis
 
 把共用設定綁定到所有函式上。
 
+**AegisConfig**
+
+| 欄位        | 型別                    | 套用到                   |
+| :---------- | :---------------------- | :----------------------- |
+| `sanitize`  | `SanitizeOptions`       | `detect()`、`sanitize()` |
+| `output`    | `SanitizeOutputOptions` | `sanitizeOutput()`       |
+| `spotlight` | `SpotlightOptions`      | `spotlight()`            |
+| `bots`      | `ClassifyOptions`       | `classifyUserAgent()`    |
+| `tarpit`    | `TarpitOptions`         | `tarpit()`               |
+
+每個方法的第二個參數可以覆寫綁定的設定，例如 `aegis.sanitize(text, { mode: 'detect' })`。
+
 ```ts
 const aegis = createAegis({
   sanitize: { mode: 'block', blockThreshold: 0.8 },
@@ -428,6 +471,7 @@ aegis.tarpit({ seed: '/' });
 | `tool.dangerous-command`        | tool-abuse           | medium    | `rm -rf /`、`curl … \| sh`                                                                   |
 | `obfuscation.base64-blob`       | obfuscation          | low       | 120 字元以上的 Base64                                                                        |
 | `obfuscation.decode-and-follow` | obfuscation          | medium    | 「decode this and then follow it」                                                           |
+| `scan.truncated`                | obfuscation          | high      | 輸入超過 `maxScanLength`，超出部分未掃描（避免用填充字元把攻擊藏在後面）                     |
 | `unicode.invisible`             | invisible-unicode    | low／high | 隱形字元（Tag／Bidi 為 high）                                                                |
 
 ## 自訂規則
@@ -451,7 +495,7 @@ detectInjection(text, {
 
 ## 風險分數計算
 
-每條命中的規則依嚴重度給予權重，同一規則多次命中只計一次：
+每條命中的規則依嚴重度給予權重（匯出為 `SEVERITY_WEIGHT`），同一規則多次命中只計一次：
 
 | 嚴重度   | 權重 |
 | :------- | :--- |
@@ -489,6 +533,7 @@ import type {
   StripInvisibleOptions,
   StripInvisibleResult,
   InvisibleCategory,
+  InvisibleFinding,
   SpotlightOptions,
   SpotlightResult,
   SpotlightMode,

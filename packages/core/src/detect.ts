@@ -31,7 +31,12 @@ export interface DetectOptions {
   maxMatchesPerRule?: number;
   /** Treat any invisible / smuggling characters as a finding. Default `true`. */
   flagInvisible?: boolean;
-  /** Inputs above this many chars are only scanned up to the limit. Default 100 000. */
+  /**
+   * Characters scanned. Default 1 000 000. Rules are linear-time, so the
+   * whole input is scanned; anything longer than this is reported as the
+   * `scan.truncated` finding (severity high) rather than silently passing —
+   * otherwise padding the input would hide an attack past the limit.
+   */
   maxScanLength?: number;
 }
 
@@ -48,7 +53,9 @@ export interface DetectionResult {
 }
 
 /** Prepare text for matching: strip invisibles, NFKC, collapse whitespace. */
-export function prepareForMatching(text: string, maxLength = 100_000) {
+export const DEFAULT_MAX_SCAN_LENGTH = 1_000_000;
+
+export function prepareForMatching(text: string, maxLength = DEFAULT_MAX_SCAN_LENGTH) {
   const slice = text.length > maxLength ? text.slice(0, maxLength) : text;
   const stripped = stripInvisible(slice, { collectFindings: false, preserveEmojiZwj: true });
   const normalized = normalizeForMatching(stripped.text).replace(/[ \t\f\v\u00a0\u3000]+/g, ' ');
@@ -87,6 +94,19 @@ export function detectInjection(text: string, options: DetectOptions = {}): Dete
   const matches: DetectionMatch[] = [];
   const weights: number[] = [];
   let smuggledPayload = '';
+
+  const limit = options.maxScanLength ?? DEFAULT_MAX_SCAN_LENGTH;
+  if (text.length > limit) {
+    matches.push({
+      ruleId: 'scan.truncated',
+      category: 'obfuscation',
+      severity: 'high',
+      description: `Input is ${text.length} chars; only the first ${limit} were scanned.`,
+      match: '',
+      index: limit,
+    });
+    weights.push(SEVERITY_WEIGHT.high);
+  }
 
   if ((options.flagInvisible ?? true) && stripped.removed > 0) {
     const smuggled =

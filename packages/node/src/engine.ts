@@ -114,6 +114,14 @@ export interface AegisNodeOptions {
         blockStatus?: number;
         /** Bodies nested deeper than this are rejected. Default 64. */
         maxDepth?: number;
+        /**
+         * Max number of string values screened per body. Each string runs the
+         * full rule set, so an unbounded count lets a small JSON body (many
+         * tiny strings) stall the event loop. Default 2000.
+         */
+        maxStrings?: number;
+        /** Max total characters across all screened strings. Default 1 000 000. */
+        maxTotalChars?: number;
       });
   /** Serve `GET /robots.txt` with AI opt-out rules. Default off. */
   robotsTxt?: boolean | RobotsTxtOptions;
@@ -163,12 +171,57 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> => {
   return proto === Object.prototype || proto === null;
 };
 
-class BodyTooDeepError extends Error {}
+class BodyLimitError extends Error {
+  constructor(readonly code: 'body_too_deep' | 'body_too_large') {
+    super(code);
+  }
+}
 
+/**
+ * Cheap pre-pass: count strings / characters / depth without running any
+ * detection, so oversized bodies are rejected before the expensive work.
+ * Iterative, so hostile nesting cannot overflow the stack.
+ */
+function measureBody(
+  body: unknown,
+  limits: { maxDepth: number; maxStrings: number; maxTotalChars: number; fields?: string[] },
+): void {
+  let strings = 0;
+  let chars = 0;
+  const { fields } = limits;
+  const stack: [unknown, number, string][] = [[body, 0, '']];
+  while (stack.length) {
+    const [value, depth, path] = stack.pop()!;
+    if (depth > limits.maxDepth) throw new BodyLimitError('body_too_deep');
+    if (typeof value === 'string') {
+      // Only strings that will actually be screened count toward the budget.
+      if (fields && !fields.some((f) => matchPath(f, path))) continue;
+      strings++;
+      chars += value.length;
+      if (strings > limits.maxStrings || chars > limits.maxTotalChars) {
+        throw new BodyLimitError('body_too_large');
+      }
+    } else if (Array.isArray(value)) {
+      value.forEach((v, i) =>
+        stack.push([v, depth + 1, fields ? (path ? `${path}.${i}` : String(i)) : '']),
+      );
+    } else if (isPlainObject(value)) {
+      for (const [k, v] of Object.entries(value))
+        stack.push([v, depth + 1, fields ? (path ? `${path}.${k}` : k) : '']);
+    }
+  }
+}
+
+/**
+ * Does `path` fall under the field `pattern`? A pattern covers its whole
+ * subtree: `body` matches `body`, `body.0`, `body.text`; `messages.*.content`
+ * also matches OpenAI-style `messages.0.content.1.text` content-part arrays.
+ * (Exact matching let attackers bypass screening by wrapping text in an array.)
+ */
 function matchPath(pattern: string, path: string): boolean {
   const p = pattern.split('.');
   const q = path.split('.');
-  if (p.length !== q.length) return false;
+  if (q.length < p.length) return false;
   return p.every((seg, i) => seg === '*' || seg === q[i]);
 }
 
@@ -252,9 +305,13 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
     const scores: number[] = [];
     let blocked = false;
     let changed = false;
-    const maxDepth = opts.maxDepth ?? 64;
+    measureBody(body, {
+      maxDepth: opts.maxDepth ?? 64,
+      maxStrings: opts.maxStrings ?? 2000,
+      maxTotalChars: opts.maxTotalChars ?? 1_000_000,
+      ...(opts.fields ? { fields: opts.fields } : {}),
+    });
     const visit = (value: unknown, path: string, depth: number): unknown => {
-      if (depth > maxDepth) throw new BodyTooDeepError();
       if (typeof value === 'string') {
         if (opts.fields && !opts.fields.some((f) => matchPath(f, path))) return value;
         const r = sanitizePrompt(value, { mode: 'block', ...opts });
@@ -391,9 +448,10 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       try {
         r = sanitizeBody(req.body, s);
       } catch (err) {
-        if (!(err instanceof BodyTooDeepError)) throw err;
-        reasons.push('body-too-deep');
-        emit('blocked', req, { reason: 'body-too-deep' });
+        if (!(err instanceof BodyLimitError)) throw err;
+        const reason = err.code === 'body_too_deep' ? 'body-too-deep' : 'body-too-large';
+        reasons.push(reason);
+        emit('blocked', req, { reason });
         return {
           action: 'block',
           reasons,
@@ -401,7 +459,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
           response: {
             status: s.blockStatus ?? 400,
             headers: { 'content-type': 'application/json; charset=utf-8' },
-            body: JSON.stringify({ error: 'body_too_deep' }),
+            body: JSON.stringify({ error: err.code }),
           },
         };
       }
@@ -460,4 +518,4 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
 
 export type AegisEngine = ReturnType<typeof createAegisEngine>;
 
-export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

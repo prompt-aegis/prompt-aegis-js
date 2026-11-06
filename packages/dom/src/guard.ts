@@ -1,3 +1,4 @@
+import { SHOW_TEXT } from './dom-constants';
 import {
   sanitizePrompt,
   stripInvisible,
@@ -27,9 +28,11 @@ export interface GuardInputOptions {
   onBlock?: (event: GuardEvent) => void;
 }
 
+// tagName instead of `instanceof` so elements from iframes / jsdom realms work.
 const isTextControl = (el: Element): el is TextControl =>
-  el instanceof HTMLTextAreaElement ||
-  (el instanceof HTMLInputElement && /^(?:text|search|url|email|tel|)$/i.test(el.type));
+  el.tagName === 'TEXTAREA' ||
+  (el.tagName === 'INPUT' &&
+    /^(?:text|search|url|email|tel|)$/i.test((el as HTMLInputElement).type));
 
 function readValue(el: GuardTarget): string {
   return isTextControl(el) ? el.value : (el.textContent ?? '');
@@ -71,7 +74,7 @@ function writeValue(el: GuardTarget, value: string): void {
     }
   } else if (el.isContentEditable) {
     // Only rewrite text nodes so markup/formatting is preserved.
-    const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const walker = el.ownerDocument.createTreeWalker(el, SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const t = n.nodeValue ?? '';
       const s = stripInvisible(t, { collectFindings: false }).text;
@@ -140,7 +143,8 @@ export function guardInput(el: GuardTarget, options: GuardInputOptions = {}): ()
     // e.g. Vue v-model) observe the cleaned value.
     redispatching = true;
     try {
-      el.dispatchEvent(new Event('input', { bubbles: true }));
+      const EventCtor = el.ownerDocument.defaultView?.Event ?? Event;
+      el.dispatchEvent(new EventCtor('input', { bubbles: true }));
     } finally {
       redispatching = false;
     }

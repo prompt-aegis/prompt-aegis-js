@@ -1,0 +1,21 @@
+{
+  "name": "@prompt-aegis/demo-site",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local content site protected by prompt-aegis, plus a script that attacks it.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "attack": "node attack.mjs",
+    "attack:unprotected": "node attack.mjs --unprotected"
+  },
+  "dependencies": {
+    "@prompt-aegis/core": "workspace:*",
+    "@prompt-aegis/dom": "workspace:*",
+    "@prompt-aegis/node": "workspace:*",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}
