@@ -41,14 +41,14 @@
 
 ## 環境需求
 
-| 項目                 | 版本                                                                                        |
-| :------------------- | :------------------------------------------------------------------------------------------ |
-| Node.js／Bun         | Node ≥ 18；Bun ≥ 1.1                                                                        |
-| 瀏覽器               | 支援 ES2020 的現代瀏覽器                                                                    |
-| TypeScript（選用）   | ≥ 5.0，`moduleResolution` 需為 `bundler`、`node16` 或 `nodenext`（見[安裝](#5-typescript)） |
-| React（選用）        | ≥ 17（僅 `@prompt-aegis/dom/react`）                                                        |
-| Vue（選用）          | ≥ 3.3（僅 `@prompt-aegis/dom/vue`）                                                         |
-| pnpm（僅開發本專案） | ≥ 9                                                                                         |
+| 項目                 | 版本                                                                                                    |
+| :------------------- | :------------------------------------------------------------------------------------------------------ |
+| Node.js／Bun         | Node ≥ 18；Bun ≥ 1.1                                                                                    |
+| 瀏覽器               | 支援 ES2020 的現代瀏覽器                                                                                |
+| TypeScript（選用）   | ≥ 5.0；`moduleResolution` 支援 `bundler`、`node16`、`nodenext` 與舊的 `node`（見[安裝](#5-typescript)） |
+| React（選用）        | ≥ 17（僅 `@prompt-aegis/dom/react`）                                                                    |
+| Vue（選用）          | ≥ 3.3（僅 `@prompt-aegis/dom/vue`）                                                                     |
+| pnpm（僅開發本專案） | ≥ 9                                                                                                     |
 
 ## 安裝
 
@@ -106,7 +106,7 @@ const { aegisExpress } = require('@prompt-aegis/node');
 
 ### 5. TypeScript
 
-型別定義已內建，不需要另外安裝 `@types/...`。`tsconfig.json` 的 `moduleResolution` 請使用 `bundler`（Vite、Next.js 等）或 `node16`／`nodenext`（純 Node.js）：
+型別定義已內建，不需要另外安裝 `@types/...`。`tsconfig.json` 的 `moduleResolution` 建議使用 `bundler`（Vite、Next.js 等）或 `node16`／`nodenext`（純 Node.js）：
 
 ```jsonc
 {
@@ -117,7 +117,7 @@ const { aegisExpress } = require('@prompt-aegis/node');
 }
 ```
 
-> 若使用較舊的 `"moduleResolution": "node"`，TypeScript 會找不到 `@prompt-aegis/dom/react`、`@prompt-aegis/dom/vue` 的型別（`TS2307`），請改成上面的設定。
+> 較舊的 `"moduleResolution": "node"`（TypeScript 5 的 `node10`）從 **0.1.1** 起也能找到 `@prompt-aegis/dom/react`、`@prompt-aegis/dom/vue` 的型別。使用 0.1.0 時若出現 `TS2307: Cannot find module '@prompt-aegis/dom/vue'`，請升級到 0.1.1 以上，或改用上面的設定。
 
 ### 6. 不使用打包工具（CDN）
 

@@ -1,6 +1,6 @@
 {
   "name": "@prompt-aegis/dom",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Browser-side defenses: input guards, DOM honeypots / agent tarpits, hidden-injection scanner, React & Vue bindings.",
   "license": "MIT",
   "repository": {
@@ -49,6 +49,16 @@
       }
     },
     "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "react": [
+        "./dist/react.d.ts"
+      ],
+      "vue": [
+        "./dist/vue.d.ts"
+      ]
+    }
   },
   "files": [
     "dist",
