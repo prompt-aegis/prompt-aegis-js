@@ -1,8 +1,21 @@
-# prompt-aegis-js
+<p align="center">
+  <img src="assets/logo.png" alt="prompt-aegis-js" width="180" height="180">
+</p>
 
-> 不綁定框架的 TypeScript 工具組，在前端與伺服器端即時防禦 **LLM 提示詞注入（Prompt Injection）** 與 **惡意 AI 爬蟲**。
+<h1 align="center">prompt-aegis-js</h1>
 
-[![npm](https://img.shields.io/npm/v/@prompt-aegis/node?label=npm)](https://www.npmjs.com/package/@prompt-aegis/node) [![CI](https://github.com/prompt-aegis/prompt-aegis-js/actions/workflows/ci.yml/badge.svg)](https://github.com/prompt-aegis/prompt-aegis-js/actions/workflows/ci.yml) ![license](https://img.shields.io/badge/license-MIT-blue) ![node](https://img.shields.io/badge/node-%3E%3D18-green) ![types](https://img.shields.io/badge/types-TypeScript-3178c6) ![module](https://img.shields.io/badge/module-ESM%20%2B%20CJS-orange)
+<p align="center">
+  不綁定框架的 TypeScript 工具組，在前端與伺服器端即時防禦 <b>LLM 提示詞注入（Prompt Injection）</b> 與 <b>惡意 AI 爬蟲</b>。
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@prompt-aegis/node"><img src="https://img.shields.io/npm/v/@prompt-aegis/node?label=npm" alt="npm"></a>
+  <a href="https://github.com/prompt-aegis/prompt-aegis-js/actions/workflows/ci.yml"><img src="https://github.com/prompt-aegis/prompt-aegis-js/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="license">
+  <img src="https://img.shields.io/badge/node-%3E%3D18-green" alt="node">
+  <img src="https://img.shields.io/badge/types-TypeScript-3178c6" alt="types">
+  <img src="https://img.shields.io/badge/module-ESM%20%2B%20CJS-orange" alt="module">
+</p>
 
 ## 目錄
 
@@ -38,6 +51,7 @@
 - **Spotlighting**：把外部內容（網頁、文件、Email）標記為「資料」，降低間接注入成功率。
 - **Egress（輸出端）**：渲染模型回覆前，移除可用於外洩資料的圖片與危險連結。
 - **反爬蟲**：辨識 30+ 種 AI 爬蟲，產生 robots.txt；對不守規則的爬蟲提供 Tarpit 誘捕頁、無限迷宮連結與 Canary 追蹤標記。
+- **被動 agent-tarpit**（`@prompt-aegis/tarpit`）：協定層 FTP 蜜罐，把自動化 LLM 攻擊代理困在無限假檔案系統裡原地打轉，耗盡其時間與 API 成本——只在你自己的機器上浪費攻擊者，不碰對方任何東西（Mantis 論文的被動防禦，[arXiv:2410.20911](https://arxiv.org/abs/2410.20911)）。
 - **零依賴、Tree-shakable**：同時輸出 ESM／CJS 與 `.d.ts` 型別定義。
 
 ## 環境需求
@@ -602,6 +616,8 @@ pnpm attack:unprotected   # 對照組：關掉防護再攻擊一次
                 └──────────────────────────────────┘
 
 AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑 ──▶ 標記用戶端（IP + UA）──▶ Tarpit 誘捕頁 + Canary 迷宮
+
+AI 攻擊代理 ──▶ 誘餌 FTP 服務 ──▶ 無限假檔案系統 ──▶ 代理一直 ls／cd ──▶ 耗盡其回合與 API 成本（被動 agent-tarpit）
 ```
 
 ## 建議整合步驟
@@ -611,7 +627,8 @@ AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑
 3. **外部內容**：把 RAG 文件、網頁、Email 等不可信內容用 `spotlight()` 包裝後再送入模型。→ [core 文件](packages/core/README.md#spotlight)
 4. **模型輸出**：渲染前一律經過 `sanitizeModelOutput()`。→ [core 文件](packages/core/README.md#sanitizemodeloutput)
 5. **反爬蟲**：在頁面加入 `AegisHoneypot`／`injectHoneypot()`，並把 Canary 記錄下來，日後可用 `findCanaries()` 比對外洩。→ [dom 文件](packages/dom/README.md#蜜罐與-tarpit)
-6. **監控**：透過 `onEvent` 將事件送進你的 logging／告警系統。
+6. **困住攻擊代理**（選用，進階）：面對會自動化攻打協定服務的 LLM 代理，可用 `@prompt-aegis/tarpit` 架一個誘餌 FTP 蜜罐，把它困在無限假檔案系統裡耗盡資源。→ [tarpit 文件](packages/tarpit/README.md)
+7. **監控**：透過 `onEvent` 將事件送進你的 logging／告警系統。
 
 ## 文件
 
@@ -620,6 +637,7 @@ AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑
 - [`@prompt-aegis/node` API 參考](packages/node/README.md)
 - [`@prompt-aegis/tarpit` API 參考](packages/tarpit/README.md)
 - [本機攻防演練網站](examples/demo-site/README.md)
+- [agent-tarpit 實戰紀錄](examples/agent-trap/README.md)
 - [版本紀錄（CHANGELOG）](CHANGELOG.md)
 
 ## 開發
