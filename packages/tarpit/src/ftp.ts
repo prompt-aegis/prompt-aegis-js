@@ -104,9 +104,14 @@ export function createFtpTarpit(options: FtpTarpitOptions = {}): FtpTarpit {
     private pasv: {
       server: net.Server;
       port: number;
-      waiters: ((s: net.Socket) => void)[];
+      /** Transfer commands waiting for a data socket. */
+      waiters: ((s: net.Socket | null) => void)[];
+      /** Data sockets that connected before their transfer command arrived. */
+      ready: net.Socket[];
     } | null = null;
     private closed = false;
+    /** Serialises command handling so e.g. LIST never runs before its PASV finishes. */
+    private queue: Promise<void> = Promise.resolve();
 
     constructor(
       readonly id: number,
@@ -141,7 +146,10 @@ export function createFtpTarpit(options: FtpTarpitOptions = {}): FtpTarpit {
       while ((idx = this.buffer.indexOf('\n')) >= 0) {
         const raw = this.buffer.slice(0, idx).replace(/\r$/, '');
         this.buffer = this.buffer.slice(idx + 1);
-        if (raw.length) void this.handle(raw, remoteAddress);
+        if (raw.length) {
+          const line = raw;
+          this.queue = this.queue.then(() => this.handle(line, remoteAddress)).catch(() => {});
+        }
       }
     }
 
@@ -286,16 +294,19 @@ export function createFtpTarpit(options: FtpTarpitOptions = {}): FtpTarpit {
     private async openPasv(remoteAddress: string | undefined, extended: boolean): Promise<void> {
       this.teardownPasv();
       const dataServer = net.createServer();
-      const waiters: ((s: net.Socket) => void)[] = [];
+      const waiters: ((s: net.Socket | null) => void)[] = [];
+      const ready: net.Socket[] = [];
       dataServer.on('connection', (s) => {
         s.on('error', () => {});
         const w = waiters.shift();
+        // Deliver to a waiting transfer, or park it until one arrives (the
+        // client may connect the data socket before sending LIST/RETR).
         if (w) w(s);
-        else s.once('readable', () => {}); // hold until a transfer command claims it
+        else ready.push(s);
       });
       await new Promise<void>((resolve) => dataServer.listen(0, host, resolve));
       const port = (dataServer.address() as net.AddressInfo).port;
-      this.pasv = { server: dataServer, port, waiters };
+      this.pasv = { server: dataServer, port, waiters, ready };
 
       if (extended) {
         this.reply(`229 Entering Extended Passive Mode (|||${port}|)`);
@@ -310,12 +321,15 @@ export function createFtpTarpit(options: FtpTarpitOptions = {}): FtpTarpit {
 
     private teardownPasv(): void {
       if (!this.pasv) return;
+      const { server, ready, waiters } = this.pasv;
+      this.pasv = null;
       try {
-        this.pasv.server.close();
+        server.close();
       } catch {
         /* ignore */
       }
-      this.pasv = null;
+      for (const s of ready) s.destroy(); // don't leak unclaimed data sockets
+      for (const w of waiters) w(null); // unblock any pending transfer → 425
     }
 
     /** Wait for the client's data connection, send the body, then reply 226. */
@@ -326,13 +340,16 @@ export function createFtpTarpit(options: FtpTarpitOptions = {}): FtpTarpit {
       }
       this.reply(`150 Here comes the ${kind} data.`);
       const pasv = this.pasv;
-      const dataSocket = await new Promise<net.Socket | null>((resolve) => {
-        const timer = setTimeout(() => resolve(null), 10_000);
-        pasv.waiters.push((s) => {
-          clearTimeout(timer);
-          resolve(s);
-        });
-      });
+      // Use a socket that already connected, else wait for one.
+      const dataSocket =
+        pasv.ready.shift() ??
+        (await new Promise<net.Socket | null>((resolve) => {
+          const timer = setTimeout(() => resolve(null), 10_000);
+          pasv.waiters.push((s) => {
+            clearTimeout(timer);
+            resolve(s);
+          });
+        }));
       this.teardownPasv();
       if (!dataSocket) {
         this.reply('425 Failed to establish data connection.');
