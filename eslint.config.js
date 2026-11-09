@@ -28,6 +28,8 @@ export default tseslint.config(
         fetch: 'readonly',
         performance: 'readonly',
         setTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
         URL: 'readonly',
         AbortSignal: 'readonly',
       },

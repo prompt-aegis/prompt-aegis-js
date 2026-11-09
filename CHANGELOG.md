@@ -1,8 +1,16 @@
 # 版本紀錄
 
-本專案的所有重要變更都會記錄在這裡。格式依循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號依循 [語意化版本](https://semver.org/lang/zh-TW/)。三個套件（`@prompt-aegis/core`、`@prompt-aegis/dom`、`@prompt-aegis/node`）使用相同的版本號。
+本專案的所有重要變更都會記錄在這裡。格式依循 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，版本號依循 [語意化版本](https://semver.org/lang/zh-TW/)。各套件（`@prompt-aegis/core`、`@prompt-aegis/dom`、`@prompt-aegis/node`、`@prompt-aegis/tarpit`）各自維護版本號。
 
 ## [未發佈]
+
+### 新增
+
+- **`@prompt-aegis/tarpit`（新套件，0.1.0）**：被動式 agent-tarpit，實作 Mantis 論文（[arXiv:2410.20911](https://arxiv.org/abs/2410.20911)）的被動防禦。
+  - `createFakeFilesystem`：決定性、無限深的假檔案系統產生器，目錄名誘人，`dirsPerLevel` 可調到數千以放大攻擊者的 token 成本，支援 Canary。
+  - `createFtpTarpit`：零依賴的 FTP 蜜罐伺服器，把自動化 LLM 攻擊代理困在假檔案系統裡無止盡探索；未知指令一律回 `502` 逼代理留在基本導覽；內建事件遙測，預設只綁本機。
+  - 刻意**不**實作論文的「主動反擊（hack-back／reverse shell）」——那是入侵他人機器的程式碼，且在多數司法管轄區違法。
+- `examples/agent-trap`：`pnpm trap-demo` 示範一個貪婪的自動化代理如何被困住、燒掉回合與頻寬。
 
 ## [0.1.1] — 2026-11-06
 

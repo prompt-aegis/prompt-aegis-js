@@ -6,7 +6,8 @@
     "paths": {
       "@prompt-aegis/core": ["packages/core/src/index.ts"],
       "@prompt-aegis/dom": ["packages/dom/src/index.ts"],
-      "@prompt-aegis/node": ["packages/node/src/index.ts"]
+      "@prompt-aegis/node": ["packages/node/src/index.ts"],
+      "@prompt-aegis/tarpit": ["packages/tarpit/src/index.ts"]
     }
   },
   "include": ["packages/*/src", "packages/*/test", "vitest.config.ts"]

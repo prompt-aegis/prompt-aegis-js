@@ -1,0 +1,63 @@
+{
+  "name": "@prompt-aegis/tarpit",
+  "version": "0.1.0",
+  "description": "Passive agent-tarpit: a protocol-level honeypot (FTP) that traps malicious LLM-driven attack agents in an infinite fake filesystem, draining their time and API budget. Defensive only — never touches the attacker's machine.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prompt-aegis/prompt-aegis-js.git",
+    "directory": "packages/tarpit"
+  },
+  "homepage": "https://github.com/prompt-aegis/prompt-aegis-js/tree/main/packages/tarpit#readme",
+  "bugs": {
+    "url": "https://github.com/prompt-aegis/prompt-aegis-js/issues"
+  },
+  "keywords": [
+    "tarpit",
+    "honeypot",
+    "llm",
+    "ai-agent",
+    "prompt-injection",
+    "security",
+    "ftp",
+    "defense"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@prompt-aegis/core": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "basic-ftp": "^5.0.5"
+  }
+}
