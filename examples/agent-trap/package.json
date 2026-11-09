@@ -1,0 +1,12 @@
+{
+  "name": "@prompt-aegis/agent-trap-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node demo.mjs"
+  },
+  "dependencies": {
+    "@prompt-aegis/tarpit": "workspace:*"
+  }
+}
