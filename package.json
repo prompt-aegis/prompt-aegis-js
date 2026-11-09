@@ -19,7 +19,8 @@
     "release:dry": "pnpm build && pnpm -r publish --dry-run --no-git-checks",
     "demo": "pnpm build && pnpm --filter @prompt-aegis/demo-site start",
     "attack": "pnpm build && pnpm --filter @prompt-aegis/demo-site attack",
-    "attack:unprotected": "pnpm build && pnpm --filter @prompt-aegis/demo-site attack:unprotected"
+    "attack:unprotected": "pnpm build && pnpm --filter @prompt-aegis/demo-site attack:unprotected",
+    "trap-demo": "pnpm build && node examples/agent-trap/demo.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -36,6 +36,12 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.5)(jsdom@26.1.0)
 
+  examples/agent-trap:
+    dependencies:
+      '@prompt-aegis/tarpit':
+        specifier: workspace:*
+        version: link:../../packages/tarpit
+
   examples/demo-site:
     dependencies:
       '@prompt-aegis/core':
@@ -80,6 +86,12 @@ importers:
         version: 3.5.45(typescript@5.9.3)
 
   packages/node:
+    dependencies:
+      '@prompt-aegis/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/tarpit:
     dependencies:
       '@prompt-aegis/core':
         specifier: workspace:*

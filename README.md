@@ -25,11 +25,12 @@
 
 ## 套件一覽
 
-| 套件                                                                     | 執行環境      | 說明                                                                                                   | 文件                                     |
-| :----------------------------------------------------------------------- | :------------ | :----------------------------------------------------------------------------------------------------- | :--------------------------------------- |
-| [`@prompt-aegis/core`](https://www.npmjs.com/package/@prompt-aegis/core) | 任何 JS 環境  | 零依賴核心：隱形字元過濾、注入偵測、淨化、Spotlighting、模型輸出過濾、AI 爬蟲辨識、Tarpit／Canary 產生 | [packages/core](packages/core/README.md) |
-| [`@prompt-aegis/dom`](https://www.npmjs.com/package/@prompt-aegis/dom)   | 瀏覽器        | 輸入框／表單防護、隱形蜜罐、隱藏注入掃描、自動化偵測、React／Vue 元件                                  | [packages/dom](packages/dom/README.md)   |
-| [`@prompt-aegis/node`](https://www.npmjs.com/package/@prompt-aegis/node) | Node.js／Edge | Express、Koa、Fastify、Hono、Fetch API 中介層：請求內容檢查、爬蟲政策、陷阱路徑、Tarpit 回應           | [packages/node](packages/node/README.md) |
+| 套件                                                                         | 執行環境      | 說明                                                                                                   | 文件                                         |
+| :--------------------------------------------------------------------------- | :------------ | :----------------------------------------------------------------------------------------------------- | :------------------------------------------- |
+| [`@prompt-aegis/core`](https://www.npmjs.com/package/@prompt-aegis/core)     | 任何 JS 環境  | 零依賴核心：隱形字元過濾、注入偵測、淨化、Spotlighting、模型輸出過濾、AI 爬蟲辨識、Tarpit／Canary 產生 | [packages/core](packages/core/README.md)     |
+| [`@prompt-aegis/dom`](https://www.npmjs.com/package/@prompt-aegis/dom)       | 瀏覽器        | 輸入框／表單防護、隱形蜜罐、隱藏注入掃描、自動化偵測、React／Vue 元件                                  | [packages/dom](packages/dom/README.md)       |
+| [`@prompt-aegis/node`](https://www.npmjs.com/package/@prompt-aegis/node)     | Node.js／Edge | Express、Koa、Fastify、Hono、Fetch API 中介層：請求內容檢查、爬蟲政策、陷阱路徑、Tarpit 回應           | [packages/node](packages/node/README.md)     |
+| [`@prompt-aegis/tarpit`](https://www.npmjs.com/package/@prompt-aegis/tarpit) | Node.js       | 被動式 agent-tarpit：FTP 蜜罐，把自動化 LLM 攻擊代理困在無限假檔案系統裡，耗盡其時間與 API 成本        | [packages/tarpit](packages/tarpit/README.md) |
 
 ## 功能特色
 
@@ -617,6 +618,7 @@ AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑
 - [`@prompt-aegis/core` API 參考](packages/core/README.md)
 - [`@prompt-aegis/dom` API 參考](packages/dom/README.md)
 - [`@prompt-aegis/node` API 參考](packages/node/README.md)
+- [`@prompt-aegis/tarpit` API 參考](packages/tarpit/README.md)
 - [本機攻防演練網站](examples/demo-site/README.md)
 - [版本紀錄（CHANGELOG）](CHANGELOG.md)
 
@@ -641,6 +643,7 @@ pnpm install
 | `pnpm format:check` | 檢查格式（CI 用）                                                                                |
 | `pnpm demo`         | 建置並啟動本機示範網站（http://localhost:3070）                                                  |
 | `pnpm attack`       | 對示範網站發動模擬攻擊；`pnpm attack:unprotected` 為關閉防護的對照組                             |
+| `pnpm trap-demo`    | 示範 agent-tarpit 困住一個自動化代理                                                             |
 | `pnpm release:dry`  | 建置並模擬發佈（檢查打包內容）                                                                   |
 | `pnpm release`      | 建置、測試後以 `pnpm publish` 發佈所有套件（`workspace:*` 會自動換成實際版本）                   |
 
@@ -666,9 +669,11 @@ prompt-aegis-js/
 ├── packages/
 │   ├── core/   # @prompt-aegis/core
 │   ├── dom/    # @prompt-aegis/dom
-│   └── node/   # @prompt-aegis/node
+│   ├── node/   # @prompt-aegis/node
+│   └── tarpit/ # @prompt-aegis/tarpit
 ├── examples/
-│   └── demo-site/   # 本機攻防演練網站
+│   ├── demo-site/   # 本機攻防演練網站
+│   └── agent-trap/  # agent-tarpit 示範（困住自動化代理）
 ├── CHANGELOG.md
 ├── package.json
 ├── pnpm-workspace.yaml
