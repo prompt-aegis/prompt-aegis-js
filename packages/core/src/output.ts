@@ -33,6 +33,16 @@ export interface SanitizeOutputOptions {
    * - `'allow'`: leave HTML untouched — only if your renderer sanitises HTML itself.
    */
   html?: 'escape' | 'filter' | 'allow';
+  /**
+   * Bare URLs in prose (`https://…`, `www.…`). Many renderers (marked with its
+   * default `gfm: true`, markdown-it with `linkify`) turn these into links with
+   * no Markdown syntax at all, so they would bypass `allowedLinkHosts`.
+   * - `'defang'` (default when `allowedLinkHosts` is a list): a non-allowed bare
+   *   URL is rewritten so it cannot be auto-linked (`https://x` → `hxxps://x`,
+   *   `www.x` → `www[.]x`) and reported in `removedUrls`.
+   * - `'keep'`: leave bare URLs alone (default when `allowedLinkHosts` is `'*'`).
+   */
+  bareUrls?: 'defang' | 'keep';
 }
 
 export interface SanitizeOutputResult {
@@ -60,6 +70,62 @@ export function hostAllowed(url: string, allowed: string[]): boolean {
 /** A URL is "remote" if it has a scheme or is protocol-relative. */
 const hasScheme = (u: string) => /^[a-z][a-z0-9+.-]*:/i.test(u.trim()) || u.trim().startsWith('//');
 const DANGEROUS_SCHEME = /^\s*(?:javascript|vbscript|data|file):/i;
+
+/** ASCII punctuation that CommonMark lets you backslash-escape. */
+const ESCAPABLE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
+
+/**
+ * The destination a CommonMark renderer will actually emit for `raw`, or
+ * `null` when it cannot be decided safely. Renderers resolve backslash escapes
+ * and entity references *before* the browser parses the URL, while a plain
+ * `new URL(raw)` treats `\` as a path separator — so `https://ok\@evil` looks
+ * like host `ok` to a naive check but renders as `https://ok@evil` (host
+ * `evil`). Checking the rendered form closes that gap.
+ */
+function renderedDestination(raw: string): string | null {
+  let unresolved = false;
+  const out = raw
+    .replace(ESCAPABLE, '$1')
+    .replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|[a-z][a-z0-9]{1,31});/gi, (m, body: string) => {
+      const b = body.toLowerCase();
+      if (b.startsWith('#x'))
+        return String.fromCodePoint(Math.min(parseInt(b.slice(2), 16), 0x10ffff));
+      if (b.startsWith('#'))
+        return String.fromCodePoint(Math.min(parseInt(b.slice(1), 10), 0x10ffff));
+      if (b in NAMED_ENTITIES) return NAMED_ENTITIES[b]!;
+      unresolved = true; // an entity we don't decode might change the host: fail closed
+      return m;
+    });
+  return unresolved ? null : out;
+}
+
+/**
+ * Normalise a URL for an allow-list decision. Remote URLs are rejected outright
+ * (`null`) if they contain a backslash in either form: renderers, autolinkers
+ * and browsers disagree on what `\` means, and no legitimate URL needs one.
+ */
+function decisionUrl(raw: string): { url: string; remote: boolean } | null {
+  const trimmed = raw.trim();
+  const rendered = renderedDestination(trimmed);
+  if (rendered === null) return null;
+  // Renderers differ on stray angle brackets (`<<https://…>>` is not a valid
+  // CommonMark destination, yet markdown-it still links it). Judge the URL
+  // inside them, so a leading `<` cannot make a remote URL look relative.
+  const core = rendered.replace(/^[\s<]+/, '').replace(/[\s>]+$/, '');
+  const remote = hasScheme(trimmed) || hasScheme(rendered) || hasScheme(core);
+  if (remote && (trimmed.includes('\\') || rendered.includes('\\'))) return null;
+  return { url: core, remote };
+}
+
+/**
+ * GFM "extended autolinks": renderers such as marked (default `gfm: true`)
+ * turn bare `https://…` / `www.…` text into links without any Markdown syntax.
+ * No word boundary before the scheme: marked links `xhttps://…` and
+ * `_https://…_` too.
+ */
+const BARE_URL_RE =
+  /(?:(?:https?|ftp):\/\/|(?<![a-z0-9-])www\.)[^\s<>\uE000\uE001]+|(?<![\w:/.])\/\/[a-z0-9][^\s<>\uE000\uE001]*/gi;
 
 // ─── Code-span aware splitting ─────────────────────────────────────────────
 
@@ -274,15 +340,15 @@ export function sanitizeModelOutput(
   text = text.replace(/[\uE000\uE001]/g, '');
 
   const imageOk = (raw: string) => {
-    const url = raw.trim();
-    if (DANGEROUS_SCHEME.test(url)) return false;
-    return !hasScheme(url) || hostAllowed(url, imgHosts);
+    const d = decisionUrl(raw);
+    if (!d || DANGEROUS_SCHEME.test(d.url) || DANGEROUS_SCHEME.test(raw)) return false;
+    return !d.remote || hostAllowed(d.url, imgHosts);
   };
   const linkOk = (raw: string) => {
-    const url = raw.trim();
-    if (DANGEROUS_SCHEME.test(url)) return false;
-    if (linkHosts === '*' || !hasScheme(url)) return true;
-    return /^mailto:/i.test(url) || hostAllowed(url, linkHosts);
+    const d = decisionUrl(raw);
+    if (!d || DANGEROUS_SCHEME.test(d.url) || DANGEROUS_SCHEME.test(raw)) return false;
+    if (linkHosts === '*' || !d.remote) return true;
+    return /^mailto:/i.test(d.url) || hostAllowed(d.url, linkHosts);
   };
 
   const segments = splitCode(text);
@@ -298,15 +364,25 @@ export function sanitizeModelOutput(
   for (const seg of segments) {
     if (seg.code) continue;
     seg.text = seg.text.replace(
-      /^ {0,3}\[([^\]\n]{1,999})\]:[ \t]*(?:<([^>\n]*)>|(\S+))[^\n]*$/gm,
-      (line, label: string, angled: string | undefined, bare: string | undefined) => {
+      /^( {0,3}\[([^\]\n]{1,999})\]:[ \t]*)(<([^>\n]*)>|(\S+))([^\n]*)$/gm,
+      (
+        _line,
+        head: string,
+        label: string,
+        dest: string,
+        angled: string | undefined,
+        bare: string | undefined,
+        rest: string,
+      ) => {
         const url = angled ?? bare ?? '';
         const usedByImage = imageLabels.has(normLabel(label));
-        if ((usedByImage && !imageOk(url)) || !linkOk(url)) {
+        if (usedByImage ? !imageOk(url) : !linkOk(url)) {
           removedUrls.push(url);
           return '';
         }
-        return line;
+        // Only the validated destination is protected. The title and anything
+        // after it still go through the HTML and bare-URL passes.
+        return head + KEEP_OPEN + dest + KEEP_CLOSE + rest;
       },
     );
   }
@@ -319,11 +395,42 @@ export function sanitizeModelOutput(
     }
   }
 
+  // Pass 4: bare URLs a GFM / linkify renderer would auto-link.
+  const bareMode = options.bareUrls ?? (linkHosts === '*' ? 'keep' : 'defang');
+  if (bareMode === 'defang') {
+    for (const seg of segments) {
+      if (seg.code) continue;
+      seg.text = defangBareUrls(seg.text);
+    }
+  }
+
   const joined = segments
     .map((s) => s.text)
     .join('')
     .replace(/[\uE000\uE001]/g, '');
   return { text: joined, removedUrls, invisibleRemoved, htmlEscaped };
+
+  function defangBareUrls(s: string): string {
+    // Skip spans the Markdown pass already validated (link/image destinations).
+    return s
+      .split(/(\uE000[^\uE001]*\uE001)/)
+      .map((part) =>
+        part.startsWith(KEEP_OPEN)
+          ? part
+          : part.replace(BARE_URL_RE, (url) => {
+              const candidate = /^www\./i.test(url) ? `https://${url}` : url;
+              if (linkOk(candidate)) return url;
+              removedUrls.push(url);
+              // https://x → hxxps://x, ftp://x → fxp://x, www.x → www[.]x, //x → [//]x
+              return url
+                .replace(/^(h)tt(ps?:\/\/)/i, '$1xx$2')
+                .replace(/^(f)t(p:\/\/)/i, '$1x$2')
+                .replace(/^(www)\./i, '$1[.]')
+                .replace(/^\/\//, '[//]'); // //x → [//]x
+            }),
+      )
+      .join('');
+  }
 
   function rewriteInline(s: string): string {
     let out = '';

@@ -20,7 +20,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['examples/**/*.mjs'],
+    files: ['examples/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: {
       globals: {
         process: 'readonly',

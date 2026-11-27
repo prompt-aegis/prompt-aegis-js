@@ -4,6 +4,38 @@
 
 ## [未發佈]
 
+## [0.3.0] — 2026-11-27
+
+`@prompt-aegis/core`、`@prompt-aegis/node`、`@prompt-aegis/dom` 0.3.0。`@prompt-aegis/tarpit` 未變更，維持 0.1.0。
+
+> **安全性更新**：0.2.0 以前的 `sanitizeModelOutput` 有零點擊資料外洩漏洞（見下方「安全性」）。請升級 core；node 與 dom 也一併升級，因為 0.2.0 的 node／dom 把 core 鎖定在 0.2.0。
+
+### 新增
+
+- **core**：注入規則擴充繁簡中文同義說法（別管／無視／拋開／不用理會／作廢…）、日文、韓文、法文、西文、德文的「忽略先前指令」與「洩漏系統提示」句型，以及「把系統設定原文貼出來」這類逐字洩漏要求。
+- **core**：`detectInjection` 會掃描解碼後的內容（`decode` 選項，預設開啟）：可解成可讀文字的 Base64 片段一律解碼；內文提到 ROT13、反轉、解碼時，也掃描 ROT13 與反轉後的版本。解碼後命中規則會加上 high 等級的 `obfuscation.encoded-payload`。
+- **node**：`sanitize.conversationFields` 把多則訊息合併後再評分，擋下拆成兩則各自無害訊息的攻擊；`sanitize.forbidRoles` 拒絕前端送出的 `system`／`developer` 訊息。
+- **node**：`sanitize.detector` 可接上模型型偵測器，分數與規則分數合併；支援逾時（`detectorTimeoutMs`）、並行上限（`detectorConcurrency`）與失效處理（`detectorFailure`，預設 `open` 並發出 `error` 事件）。
+- **core**：UA 比對前先正規化（移除零寬字元、NFKC、同形字轉換），AI 爬蟲名稱另以去除空白與符號的方式比對，`GPT Bot`、`GPT_Bot`、`GPTB​ot`、`GPTBοt`（希臘字母）都能辨識；新增 `normalizeUserAgent`。AI 爬蟲清單新增 DeepSeekBot、Brightbot、TikTokSpider、Cotoyogi、ICC-Crawler、PhindBot、LinerBot、Gemini-Deep-Research、NovaAct、FirecrawlAgent 等 28 個。
+- **node**：`bots.verifySearchEngines` 以反查 DNS 加正向確認驗證自稱搜尋引擎的用戶端，冒充者預設送誘餌頁；DNS 逾時或暫時性錯誤時放行並稍後重查，不會把真的爬蟲當成冒充者；新增 `claimedSearchEngineDomains`。
+- **node**：`trapMode: 'strict'` 讓陷阱不再信任 `Sec-Fetch-*` 標頭，適合內部系統；`rateLimit` 提供每個用戶端的固定視窗限流（429 加 `Retry-After`，或改送誘餌頁）。
+- 新增 `pnpm sweep-threshold`：用自己的攻擊與正常語料，列出各門檻的攔截率與誤判率，作為設定 `blockThreshold` 的依據。
+
+### 安全性
+
+- **core**：`sanitizeModelOutput` 可被反斜線混淆主機繞過，造成**零點擊資料外洩**（影響 0.2.0 以前所有版本）。過濾器以 URL 標準解析 `https://允許網域\@evil.example`，把 `\` 當成路徑分隔、判定主機在白名單內；但 CommonMark 渲染器把 `\@` 當成跳脫的 `@`，輸出 `https://允許網域@evil.example`，真正的主機是攻擊者的。圖片、參考式圖片、連結與自動連結皆受影響，markdown-it 與 marked 都會載入。同類的 `<<https://…>>` 雙重角括號參考式定義、`&#92;` 實體編碼的反斜線也一併修正。現在改以「渲染後的網址」判斷網域（先還原反斜線跳脫與字元實體），遠端網址含 `\` 或無法安全解碼的實體一律移除。
+- **core**：文字中的裸網址（`https://…`、`www.…`）會被 marked 預設的 GFM 自動連結、markdown-it 的 `linkify` 變成連結，繞過 `allowedLinkHosts`。新增 `bareUrls` 選項，`allowedLinkHosts` 為白名單時預設把不在白名單的裸網址改寫成無法自動連結的形式。協定相對的 `//evil…`、緊貼底線或文字的 `_https://…_`、`xhttps://…` 也涵蓋在內。markdown-it 的 `fuzzyLink` 會把沒有 `https://` 的網域文字也變成連結，這無法由過濾器處理，請在渲染器關閉（見 core README「安全渲染檢查清單」）。
+
+### 修正
+
+- **core**：只被圖片使用的參考式定義，原本必須同時通過圖片與連結白名單；圖片網域不在連結白名單時，合法圖片會被誤刪。現在圖片參考只檢查圖片白名單。
+
+### 變更
+
+- **core**：偵測範圍擴大（新增句型、語言與解碼掃描），過去放行的訊息可能被提高分數或阻擋。升級前可用 `pnpm sweep-threshold` 以自己的正常訊息語料確認誤判；不需要解碼掃描時設 `decode: false`。
+- **core**：`allowedLinkHosts` 為白名單時，`sanitizeModelOutput` 預設把不在白名單的裸網址改寫成 `hxxps://…`；要維持舊行為請設 `bareUrls: 'keep'`。
+- **node／dom／tarpit**：對 `@prompt-aegis/core` 的依賴由 `workspace:*`（發佈為精確版本，如 `0.2.0`）改為 `workspace:^`（發佈為 `^0.3.0`）。之後 core 的修補版本會自動帶給 node 與 dom 的使用者，不必等 node／dom 重新發佈。
+
 ## [0.2.0] — 2026-11-27
 
 `@prompt-aegis/core`、`@prompt-aegis/node`、`@prompt-aegis/dom` 0.2.0。`@prompt-aegis/tarpit` 未變更，維持 0.1.0。
@@ -92,7 +124,8 @@
 - 陷阱路徑依 `Sec-Fetch-*` 判斷是否標記，跨站與子資源請求不會連累真人訪客；標記鍵為 IP + User-Agent。
 - Tarpit 有同時延遲上限（`tarpit.maxConcurrent`）；每個爬蟲、每天的 Canary 都不同；搜尋引擎爬蟲不會看到蜜罐。
 
-[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.2.0...HEAD
+[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.3.0...HEAD
+[0.3.0]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.2.0...core-v0.3.0
 [0.2.0]: https://github.com/prompt-aegis/prompt-aegis-js/compare/v0.1.1...core-v0.2.0
 [tarpit 0.1.0]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/tarpit-v0.1.0
 [0.1.1]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/v0.1.1

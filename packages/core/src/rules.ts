@@ -44,10 +44,11 @@ const INSTR =
   '(?:instructions?|prompts?|rules?|directions?|directives?|guidelines?|context|messages?|commands?|constraints?|restrictions?|programming|guardrails?)';
 
 const ZH_OVERRIDE =
-  '(?:忽略|忽視|忽视|無視|无视|忘記|忘记|忘掉|跳過|跳过|不要理會|不要理会|不理會|不理会|覆蓋|覆盖|拋棄|抛弃|放棄|放弃)';
+  '(?:忽略|忽視|忽视|無視|无视|忘記|忘记|忘掉|跳過|跳过|不要理會|不要理会|不理會|不理会|覆蓋|覆盖|拋棄|抛弃|放棄|放弃|別管|别管|不用管|不必管|甭管|別理|别理|不用理會|不用理会|不必理會|不必理会|拋開|抛开|撇開|撇开|丟掉|丢掉|擱置|搁置|作廢|作废|推翻)';
 const ZH_PRIOR =
-  '(?:之前|以前|先前|上面|上述|前面|原本|原來|原来|原有|所有|全部|系統|系统|預設|预设)';
-const ZH_INSTR = '(?:指令|指示|提示|規則|规则|設定|设定|命令|要求|限制|約束|约束|守則|守则)';
+  '(?:之前|以前|先前|上面|上述|前面|原本|原來|原来|原有|原先|剛才|刚才|稍早|既有|現有|现有|所有|全部|系統|系统|預設|预设|你的|妳的|開發者|开发者)';
+const ZH_INSTR =
+  '(?:指令|指示|提示|規則|规则|設定|设定|設置|设置|配置|命令|要求|限制|約束|约束|守則|守则|指引|規定|规定|準則|准则|政策|方針|方针)';
 
 export const DEFAULT_RULES: InjectionRule[] = [
   // ── Instruction override ────────────────────────────────────────────────
@@ -90,6 +91,48 @@ export const DEFAULT_RULES: InjectionRule[] = [
     severity: 'high',
     description: '中文：要求忽略先前／系統指令。',
     pattern: new RegExp(`${ZH_OVERRIDE}[^。\\n]{0,15}?${ZH_PRIOR}[^。\\n]{0,15}?${ZH_INSTR}`),
+  },
+  // Other languages. Each mirrors the English override / leak rules; severity
+  // matches the English equivalent so wording, not language, decides the score.
+  {
+    id: 'override.ja-ignore-previous',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'Japanese: ignore / forget previous instructions.',
+    pattern:
+      /(?:前の|以前の|上記の|これまでの|今までの|すべての|全ての|元の|最初の|システムの)[^。\n]{0,12}?(?:指示|命令|ルール|設定|指令|制約|プロンプト)[^。\n]{0,8}?(?:を)?(?:無視|忘れ|破棄|取り消)/,
+  },
+  {
+    id: 'override.ko-ignore-previous',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'Korean: ignore / forget previous instructions.',
+    pattern:
+      /(?:이전|위의|앞의|모든|기존|원래|시스템)[^.\n]{0,10}?(?:지시|지침|명령|규칙|설정|프롬프트)[^.\n]{0,10}?(?:무시|잊어|잊고|따르지)/,
+  },
+  {
+    id: 'override.fr-ignore-previous',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'French: ignore / forget previous instructions.',
+    pattern:
+      /\b(?:ignore[rz]?|oublie[rz]?|néglige[rz]?|ne\s+tiens\s+(?:pas\s+)?compte\s+(?:de|des))\b[^.\n]{0,30}?\b(?:instructions?|consignes?|règles?|directives?)\b[^.\n]{0,20}?\b(?:précédentes?|antérieures?|ci-dessus|initiales?|du\s+système|système)\b/i,
+  },
+  {
+    id: 'override.es-ignore-previous',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'Spanish: ignore / forget previous instructions.',
+    pattern:
+      /\b(?:ignora[rd]?|olvida[rd]?|omite|descarta)\b[^.\n]{0,30}?\b(?:instrucciones|indicaciones|reglas|directrices|órdenes)\b[^.\n]{0,20}?\b(?:anteriores|previas|de\s+arriba|iniciales|del\s+sistema|originales)\b/i,
+  },
+  {
+    id: 'override.de-ignore-previous',
+    category: 'instruction-override',
+    severity: 'high',
+    description: 'German: ignore / forget previous instructions.',
+    pattern:
+      /\b(?:ignorier(?:e|en|t)?|vergiss|vergessen\s+sie|missachte)\b[^.\n]{0,30}?\b(?:vorherigen|bisherigen|obigen|vorigen|ursprünglichen|alle)\b[^.\n]{0,20}?\b(?:anweisungen|instruktionen|regeln|vorgaben|befehle)\b/i,
   },
   // ── Role hijack / jailbreak ─────────────────────────────────────────────
   {
@@ -183,6 +226,37 @@ export const DEFAULT_RULES: InjectionRule[] = [
     pattern:
       /(?:顯示|显示|告訴我|告诉我|輸出|输出|洩漏|泄露|泄漏|列出|重複|重复|印出|打印|給我|给我)[^。\n]{0,15}(?:系統|系统|原始|初始|隱藏|隐藏|內部|内部)(?:提示詞|提示词|提示|指令|設定|设定|prompt)/i,
   },
+  {
+    id: 'leak.zh-verbatim',
+    category: 'prompt-leak',
+    severity: 'high',
+    description: 'Chinese: asks for the system prompt / settings verbatim.',
+    pattern:
+      /(?:系統|系统|原始|初始|隱藏|隐藏|內部|内部|開發者|开发者)(?:提示詞|提示词|提示|指令|設定|设定|設置|设置|規則|规则|prompt)[^。\n]{0,15}?(?:原文|全文|逐字|一字不漏|完整|原封不動|原封不动)|(?:原文|全文|逐字|一字不漏|完整|原封不動|原封不动)[^。\n]{0,10}?(?:貼出|贴出|貼上|贴上|列出|輸出|输出|複述|复述|印出|給我|给我)[^。\n]{0,10}?(?:系統|系统|初始|隱藏|隐藏|內部|内部)(?:提示詞|提示词|提示|指令|設定|设定)/i,
+  },
+  {
+    id: 'leak.ja-system-prompt',
+    category: 'prompt-leak',
+    severity: 'high',
+    description: 'Japanese: reveal the system prompt.',
+    pattern:
+      /(?:システム|初期|隠し|内部)(?:プロンプト|指示|設定)[^。\n]{0,10}?(?:を|の)?(?:表示|教えて|出力|見せて|公開|全文|そのまま)/,
+  },
+  {
+    id: 'leak.ko-system-prompt',
+    category: 'prompt-leak',
+    severity: 'high',
+    description: 'Korean: reveal the system prompt.',
+    pattern: /시스템\s*(?:프롬프트|지침|설정|지시)[^.\n]{0,10}?(?:보여|알려|출력|공개|그대로)/,
+  },
+  {
+    id: 'leak.eu-system-prompt',
+    category: 'prompt-leak',
+    severity: 'high',
+    description: 'French / Spanish / German: reveal the system prompt.',
+    pattern:
+      /\b(?:révèle|révèle-moi|montre|montre-moi|affiche|donne-moi|revela|revélame|muestra|muéstrame|muestrame|enseña|enséñame|dame|zeige|verrate|gib\s+mir)\b[^.\n]{0,30}?\b(?:prompt\s+(?:système|du\s+système|del\s+sistema)|instructions\s+(?:système|du\s+système)|instrucciones\s+del\s+sistema|system-?prompt|systemanweisungen)/i,
+  },
   // ── Special tokens / delimiter spoofing ─────────────────────────────────
   {
     id: 'token.chat-template',
@@ -253,6 +327,6 @@ export const DEFAULT_RULES: InjectionRule[] = [
     severity: 'medium',
     description: 'Asks the model to decode something and then obey it.',
     pattern:
-      /\b(?:decode|decrypt|deobfuscate|translate|rot13|reverse)\b[^.\n]{0,40}\b(?:then|and)\s+(?:follow|execute|obey|do|run|perform)\b/i,
+      /\b(?:decode|decrypt|deobfuscate|translate|rot-?13|reverse|unscramble)\b[^.\n]{0,40}\b(?:then|and)\s+(?:follow|execute|obey|do|run|perform|carry\s+out)\b|(?:解碼|解码|解密|解開|解开|反轉|反转|倒過來|倒过来|倒著讀|倒着读|還原|还原)[^。\n]{0,20}?(?:照做|照著做|照着做|執行|执行|遵守|遵照|服從|服从|照辦|照办)/i,
   },
 ];

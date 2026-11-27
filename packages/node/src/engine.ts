@@ -2,10 +2,14 @@ import {
   buildRobotsTxt,
   buildTarpitPayload,
   classifyUserAgent,
+  isSearchEngine,
   createCanary,
   hashString,
   renderTarpitHtml,
   sanitizePrompt,
+  combineScores,
+  detectInjection,
+  scoreToLevel,
   type BotCategory,
   type BotClassification,
   type ClassifyOptions,
@@ -18,6 +22,14 @@ import {
 import { MemoryFlagStore, type FlagStore } from './store';
 
 export type BotAction = 'allow' | 'block' | 'tarpit';
+
+/** DNS functions used to verify search-engine crawlers. */
+export interface DnsLookup {
+  /** PTR lookup: IP → hostnames. */
+  reverse(ip: string): Promise<string[]>;
+  /** Forward lookup: hostname → IP addresses (v4 and v6). */
+  resolve(hostname: string): Promise<string[]>;
+}
 
 export interface AegisRequest {
   method: string;
@@ -83,14 +95,62 @@ export interface AegisNodeOptions {
     policy?: Partial<Record<BotCategory, BotAction>>;
     /** Action when the User-Agent header is missing. Default `allow`. */
     missingUserAgent?: BotAction;
+    /**
+     * Verify clients claiming to be a search engine (Googlebot, bingbot, …)
+     * by reverse DNS + forward confirmation, as the engines themselves
+     * document. A UA is just a string: without this, "Googlebot" in the UA is
+     * enough to be treated as a search engine. Unverifiable impostors get
+     * `action` (default `tarpit`). Results are cached per IP.
+     */
+    verifySearchEngines?:
+      | boolean
+      | {
+          action?: BotAction;
+          /** DNS functions. Default: `node:dns/promises` when available. */
+          lookup?: DnsLookup;
+          /** Cache lifetime for verification results. Default 1 hour. */
+          cacheTtlMs?: number;
+          /**
+           * Give up on DNS after this long. A timeout or other transient DNS
+           * error (SERVFAIL, refused, …) never marks a client as an impostor:
+           * the request is let through and retried after `retryAfterMs`.
+           * Default 2000 ms.
+           */
+          timeoutMs?: number;
+          /** How long a transient failure is remembered. Default 60 000 ms. */
+          retryAfterMs?: number;
+        };
   };
   /**
    * Honeypot entry path. The entry and signed child links mark the client
-   * for `flagTtlMs`; unknown descendants return 404 without flagging. Add it to robots.txt
+   * for `flagTtlMs`; other paths under it are passed to your app like any unknown path. Add it to robots.txt
    * `Disallow` so only non-compliant crawlers fall in. `false` disables.
    * Default `/documents/archive`.
    */
   trapPath?: string | false;
+  /**
+   * `'safe'` (default): trap hits caused by another site (`<img>` embeds,
+   * cross-site Fetch Metadata) do not flag the visitor, so nobody can get real
+   * users tarpitted — but a scraper that forges `Sec-Fetch-*` headers is not
+   * flagged either. `'strict'`: every trap hit flags. Use on internal systems
+   * where no third-party page can embed your URLs.
+   */
+  trapMode?: 'safe' | 'strict';
+  /**
+   * Simple fixed-window rate limit per client (default key: the flag key, i.e.
+   * the IP). Per-process memory: with several instances each counts on its
+   * own — put a shared limiter in front for strict limits.
+   */
+  rateLimit?: {
+    /** Window length. Default 60 000 ms. */
+    windowMs?: number;
+    /** Requests allowed per window. */
+    max: number;
+    /** `block` (default): 429 with `Retry-After`. `tarpit`: serve decoys. */
+    action?: 'block' | 'tarpit';
+    /** Override the key; return `null` to exempt a request. */
+    key?: (req: AegisRequest) => string | null;
+  };
   /** How long a trapped client keeps getting tarpitted. Default 1 hour. */
   flagTtlMs?: number;
   /**
@@ -200,6 +260,42 @@ export interface AegisNodeOptions {
         maxStrings?: number;
         /** Max total characters across all screened strings. Default 1 000 000. */
         maxTotalChars?: number;
+        /**
+         * Also score these fields **joined together** (in body order), e.g.
+         * `['messages.*.content']`. An attack split across turns ("ignore all"
+         * / "previous instructions") is harmless per message but not combined.
+         * Reported as the `(conversation)` finding. Default: off.
+         */
+        conversationFields?: string[];
+        /**
+         * Reject bodies containing an object whose `role` is one of these
+         * (case-insensitive), e.g. `['system', 'developer']`. The client should
+         * never author system messages; letting it do so hands it the model's
+         * highest-trust channel. Default: off.
+         */
+        forbidRoles?: string[];
+        /**
+         * Extra model-based detector (e.g. a prompt-injection classifier). Runs
+         * on every screened string — and the joined conversation — after the
+         * rules; its 0…1 score is combined with the rule score. Rules stay the
+         * cheap first layer; this is where real recall comes from.
+         */
+        detector?: (
+          text: string,
+          context: { path: string; request: AegisRequest },
+        ) =>
+          | number
+          | { score: number; label?: string }
+          | Promise<number | { score: number; label?: string }>;
+        /**
+         * When the detector throws or times out: `'open'` (default) falls back
+         * to the rule score and emits an `error` event; `'closed'` blocks.
+         */
+        detectorFailure?: 'open' | 'closed';
+        /** Detector timeout per call, ms. Default 5000. */
+        detectorTimeoutMs?: number;
+        /** Max detector calls in flight per request. Default 8. */
+        detectorConcurrency?: number;
       });
   /** Serve `GET /robots.txt` with AI opt-out rules. Default off. */
   robotsTxt?: boolean | RobotsTxtOptions;
@@ -242,6 +338,65 @@ export function isTrapHitFlaggable(req: AegisRequest): boolean {
   if (site === 'cross-site' || site === 'same-site') return false;
   return dest === undefined || dest === 'document';
 }
+
+/**
+ * Search engines that document reverse-DNS verification: the PTR hostname of
+ * the client IP must end in one of these domains and resolve back to the IP.
+ * Engines without such a scheme (they publish IP lists instead) are skipped.
+ */
+const VERIFIABLE_ENGINES: [RegExp, string[]][] = [
+  [
+    /Googlebot|Google-InspectionTool|Storebot-Google|AdsBot-Google|GoogleOther/i,
+    ['googlebot.com', 'google.com', 'googleusercontent.com'],
+  ],
+  [/bingbot|BingPreview|msnbot|adidxbot/i, ['search.msn.com']],
+  [/Slurp/i, ['crawl.yahoo.net']],
+  [/Baiduspider/i, ['baidu.com', 'baidu.jp']],
+  [/YandexBot|YandexImages|YandexMobileBot/i, ['yandex.ru', 'yandex.net', 'yandex.com']],
+  [/Applebot/i, ['applebot.apple.com']],
+  [/PetalBot/i, ['petalsearch.com']],
+  [/SeznamBot/i, ['seznam.cz']],
+  [/Yeti\/|NaverBot/i, ['naver.com']],
+  [/Sogou/i, ['sogou.com']],
+];
+
+export function claimedSearchEngineDomains(userAgent: string | undefined): string[] | null {
+  if (!userAgent) return null;
+  for (const [pattern, domains] of VERIFIABLE_ENGINES) if (pattern.test(userAgent)) return domains;
+  return null;
+}
+
+/** DNS error codes that are a definitive "no record", not a transient failure. */
+const DNS_NOT_FOUND = new Set(['ENOTFOUND', 'ENODATA', 'NXDOMAIN', 'NOTFOUND']);
+const isDnsNotFound = (err: unknown) =>
+  DNS_NOT_FOUND.has(String((err as { code?: unknown } | null)?.code ?? '').toUpperCase());
+
+async function defaultDnsLookup(): Promise<DnsLookup | null> {
+  try {
+    const dns = (await import('node:dns/promises')) as typeof import('node:dns/promises');
+    return {
+      reverse: (ip) => dns.reverse(ip),
+      resolve: async (host) => {
+        const [v4, v6] = await Promise.allSettled([dns.resolve4(host), dns.resolve6(host)]);
+        if (v4.status === 'rejected' && v6.status === 'rejected') {
+          // Both failed: "no such name" is an answer, anything else is transient.
+          if (!isDnsNotFound(v4.reason) && !isDnsNotFound(v6.reason)) throw v4.reason;
+        }
+        return [
+          ...(v4.status === 'fulfilled' ? v4.value : []),
+          ...(v6.status === 'fulfilled' ? v6.value : []),
+        ];
+      },
+    };
+  } catch {
+    return null; // not a Node-compatible runtime
+  }
+}
+
+const claimedSearchEngineName = (ua: string | undefined) =>
+  (ua ?? '').match(/[A-Za-z-]*(?:bot|Slurp|spider|Yeti)\b/i)?.[0] ?? 'search-engine';
+
+const normalizeIp = (ip: string) => ip.replace(/^::ffff:/i, '').toLowerCase();
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> => {
   if (!v || typeof v !== 'object') return false;
@@ -365,6 +520,116 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
   const store = options.store ?? new MemoryFlagStore();
   const flagTtl = options.flagTtlMs ?? 60 * 60 * 1000;
   const flagKey = options.flagKey ?? defaultFlagKey;
+
+  // ── Search-engine verification ───────────────────────────────────────────
+  const verifyCfg = options.bots?.verifySearchEngines;
+  const verifyOpts = typeof verifyCfg === 'object' ? verifyCfg : {};
+  const verifyTtl = verifyOpts.cacheTtlMs ?? 60 * 60 * 1000;
+  const verifyTimeout = verifyOpts.timeoutMs ?? 2000;
+  const verifyRetry = verifyOpts.retryAfterMs ?? 60_000;
+  const verified = new Map<string, { ok: boolean | null; expires: number }>();
+  const verifying = new Map<string, Promise<boolean | null>>();
+  let dnsLookup: Promise<DnsLookup | null> | undefined;
+
+  /** `true` verified, `false` impostor, `null` cannot verify (let through). */
+  async function verifySearchEngine(
+    req: AegisRequest,
+    ua: string | undefined,
+  ): Promise<boolean | null> {
+    const domains = claimedSearchEngineDomains(ua);
+    if (!domains || !req.ip) return null;
+    const ip = normalizeIp(req.ip);
+    const cacheKey = `${ip}|${domains[0]}`;
+    const cached = verified.get(cacheKey);
+    if (cached && cached.expires > Date.now()) return cached.ok;
+    // Concurrent requests from one client share a single lookup.
+    let pending = verifying.get(cacheKey);
+    if (!pending) {
+      pending = lookupAndCache(req, ip, domains, cacheKey).finally(() =>
+        verifying.delete(cacheKey),
+      );
+      verifying.set(cacheKey, pending);
+    }
+    return pending;
+  }
+
+  async function lookupAndCache(
+    req: AegisRequest,
+    ip: string,
+    domains: string[],
+    cacheKey: string,
+  ): Promise<boolean | null> {
+    dnsLookup ??= verifyOpts.lookup ? Promise.resolve(verifyOpts.lookup) : defaultDnsLookup();
+    const dns = await dnsLookup;
+    if (!dns) {
+      emit('error', req, { hook: 'verifySearchEngines', message: 'no DNS resolver available' });
+      return null;
+    }
+    let ok: boolean | null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      ok = await Promise.race([
+        forwardConfirmed(dns, ip, domains),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`DNS lookup timed out after ${verifyTimeout}ms`)),
+            verifyTimeout,
+          );
+        }),
+      ]);
+    } catch (err) {
+      if (isDnsNotFound(err)) {
+        ok = false; // no PTR record: not a real crawler
+      } else {
+        // Timeout / SERVFAIL / resolver down: do not punish a possibly genuine crawler.
+        ok = null;
+        emit('error', req, { hook: 'verifySearchEngines', message: errorMessage(err) });
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    if (verified.size >= 10_000) verified.delete(verified.keys().next().value!);
+    verified.set(cacheKey, {
+      ok,
+      expires: Date.now() + (ok === null ? verifyRetry : verifyTtl),
+    });
+    return ok;
+  }
+
+  async function forwardConfirmed(dns: DnsLookup, ip: string, domains: string[]) {
+    const hosts = await dns.reverse(ip);
+    for (const host of hosts) {
+      const h = host.toLowerCase().replace(/\.$/, '');
+      if (!domains.some((d) => h === d || h.endsWith(`.${d}`))) continue;
+      const addresses = (await dns.resolve(h)).map(normalizeIp);
+      if (addresses.includes(ip)) return true;
+    }
+    return false;
+  }
+
+  // ── Rate limit (fixed window, per process) ──────────────────────────────
+  const rate = options.rateLimit;
+  const rateWindow = rate?.windowMs ?? 60_000;
+  const rateCounts = new Map<string, { count: number; reset: number }>();
+
+  /** Seconds until the window resets when over the limit, else `0`. */
+  function overRateLimit(req: AegisRequest, clientKey: string | null): number {
+    if (!rate) return 0;
+    const key = rate.key ? rate.key(req) : clientKey;
+    if (!key) return 0;
+    const now = Date.now();
+    let entry = rateCounts.get(key);
+    if (!entry || entry.reset <= now) {
+      if (rateCounts.size >= 50_000) {
+        for (const [k, v] of rateCounts) if (v.reset <= now) rateCounts.delete(k);
+        if (rateCounts.size >= 50_000) rateCounts.delete(rateCounts.keys().next().value!);
+      }
+      entry = { count: 0, reset: now + rateWindow };
+      rateCounts.set(key, entry);
+    }
+    entry.count++;
+    return entry.count > rate.max ? Math.max(1, Math.ceil((entry.reset - now) / 1000)) : 0;
+  }
   const tarpitCfg = {
     delayMs: 1500,
     links: 6,
@@ -513,12 +778,16 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
     return renderTarpitHtml(payload, { siteName: tarpitCfg.siteName });
   }
 
-  function sanitizeBody(
+  async function sanitizeBody(
+    req: AegisRequest,
     body: unknown,
     opts: Exclude<AegisNodeOptions['sanitize'], false | undefined>,
   ) {
     const findings: FieldFinding[] = [];
     const scores: number[] = [];
+    const screened: { path: string; text: string; ruleScore: number }[] = [];
+    const forbidden = new Set((opts.forbidRoles ?? []).map((r) => r.toLowerCase()));
+    const threshold = opts.blockThreshold ?? 0.85;
     let blocked = false;
     let changed = false;
     measureBody(body, {
@@ -540,6 +809,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
             actions: r.actions,
           });
         }
+        screened.push({ path, text: value, ruleScore: r.score });
         scores.push(r.score);
         if (r.blocked) blocked = true;
         if (r.changed) changed = true;
@@ -548,6 +818,18 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       if (Array.isArray(value))
         return value.map((v, i) => visit(v, path ? `${path}.${i}` : String(i), depth + 1));
       if (isPlainObject(value)) {
+        const role = value.role;
+        if (forbidden.size && typeof role === 'string' && forbidden.has(role.toLowerCase())) {
+          blocked = true;
+          findings.push({
+            path: path ? `${path}.role` : 'role',
+            level: 'high',
+            score: 1,
+            rules: ['role.forbidden'],
+            actions: ['blocked'],
+          });
+          scores.push(1);
+        }
         const out: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(value))
           out[k] = visit(v, path ? `${path}.${k}` : k, depth + 1);
@@ -556,6 +838,71 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       return value;
     };
     const next = visit(body, '', 0);
+
+    // Cross-turn: score the selected fields joined, so a split attack counts.
+    const convo = opts.conversationFields;
+    let conversation: { text: string; ruleScore: number } | null = null;
+    if (convo?.length) {
+      const parts = screened.filter((x) => convo.some((f) => matchPath(f, x.path)));
+      if (parts.length > 1) {
+        const text = parts.map((x) => x.text).join(' ');
+        const d = detectInjection(text, opts);
+        conversation = { text, ruleScore: d.score };
+        const best = Math.max(...parts.map((x) => x.ruleScore));
+        if (d.score > best && d.level !== 'none') {
+          findings.push({
+            path: '(conversation)',
+            level: d.level,
+            score: d.score,
+            rules: d.matches.map((m) => m.ruleId),
+            actions: [],
+          });
+          scores.push(d.score);
+          if (d.score >= threshold) blocked = true;
+        }
+      }
+    }
+
+    // Model-based detector: combined with the rule score per item.
+    if (opts.detector && !blocked) {
+      const items = [
+        ...screened.map((x) => ({ path: x.path, text: x.text, ruleScore: x.ruleScore })),
+        ...(conversation ? [{ path: '(conversation)', ...conversation }] : []),
+      ];
+      const concurrency = Math.max(1, opts.detectorConcurrency ?? 8);
+      for (let i = 0; i < items.length && !blocked; i += concurrency) {
+        const batch = items.slice(i, i + concurrency);
+        const results = await Promise.all(batch.map((item) => runDetector(req, opts, item)));
+        results.forEach((det, j) => {
+          const item = batch[j]!;
+          if (det === 'error') {
+            if ((opts.detectorFailure ?? 'open') === 'closed') {
+              blocked = true;
+              findings.push({
+                path: item.path,
+                level: 'high',
+                score: 1,
+                rules: ['detector.error'],
+                actions: ['blocked'],
+              });
+            }
+            return;
+          }
+          if (det.score <= 0) return;
+          const score = combineScores([item.ruleScore, det.score]);
+          findings.push({
+            path: item.path,
+            level: scoreToLevel(score),
+            score,
+            rules: [det.label ? `detector:${det.label}` : 'detector'],
+            actions: score >= threshold ? ['blocked'] : [],
+          });
+          scores.push(score);
+          if (score >= threshold) blocked = true;
+        });
+      }
+    }
+
     return {
       body: next,
       changed,
@@ -563,6 +910,35 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       findings,
       score: scores.reduce((a, b) => Math.max(a, b), 0),
     };
+  }
+
+  async function runDetector(
+    req: AegisRequest,
+    opts: Exclude<AegisNodeOptions['sanitize'], false | undefined>,
+    item: { path: string; text: string },
+  ): Promise<{ score: number; label?: string } | 'error'> {
+    const timeoutMs = opts.detectorTimeoutMs ?? 5000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const raw = await Promise.race([
+        Promise.resolve(opts.detector!(item.text, { path: item.path, request: req })),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`detector timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+      const r = typeof raw === 'number' ? { score: raw } : raw;
+      const score = Number(r?.score);
+      if (!Number.isFinite(score)) throw new Error('detector returned a non-numeric score');
+      return { score: Math.min(Math.max(score, 0), 1), ...(r.label ? { label: r.label } : {}) };
+    } catch (err) {
+      emit('error', req, { hook: 'detector', path: item.path, message: errorMessage(err) });
+      return 'error';
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async function inspect(req: AegisRequest): Promise<AegisDecision> {
@@ -581,6 +957,35 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
           status: 200,
           headers: { 'content-type': 'text/plain; charset=utf-8' },
           body: robotsWithTrap,
+        },
+      };
+    }
+
+    // Rate limit (before any expensive work).
+    const retryAfter = overRateLimit(req, clientKey);
+    if (retryAfter > 0) {
+      reasons.push('rate-limit');
+      emit('blocked', req, { reason: 'rate-limit', retryAfter });
+      if (rate?.action === 'tarpit') {
+        return {
+          action: 'tarpit',
+          reasons,
+          bot,
+          response: await tarpitResponse(req, 'rate-limit', bot),
+          delayMs: tarpitCfg.delayMs,
+        };
+      }
+      return {
+        action: 'block',
+        reasons,
+        bot,
+        response: {
+          status: 429,
+          headers: {
+            'content-type': 'text/plain; charset=utf-8',
+            'retry-after': String(retryAfter),
+          },
+          body: 'Too many requests.',
         },
       };
     }
@@ -633,7 +1038,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
 
     // Trap hit → flag client, serve maze.
     if (isTrap) {
-      const flaggable = isTrapHitFlaggable(req);
+      const flaggable = options.trapMode === 'strict' || isTrapHitFlaggable(req);
       if (clientKey && flaggable) await store.set(clientKey, flagTtl);
       emit('trap', req, {
         userAgent: ua ?? null,
@@ -662,9 +1067,21 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       };
     }
 
+    // Search-engine impostors: claims Googlebot & co. but fails reverse DNS.
+    let impostor = false;
+    if (verifyCfg && !bot.isBot && isSearchEngine(ua)) {
+      if ((await verifySearchEngine(req, ua)) === false) {
+        impostor = true;
+        bot.isBot = true;
+        bot.name = `${claimedSearchEngineName(ua)}-impostor`;
+        bot.operator = 'unverified';
+      }
+    }
+
     // Bot policy.
-    const action: BotAction =
-      bot.isBot && bot.category
+    const action: BotAction = impostor
+      ? (verifyOpts.action ?? 'tarpit')
+      : bot.isBot && bot.category
         ? policy[bot.category]
         : bot.missingUserAgent
           ? (options.bots?.missingUserAgent ?? 'allow')
@@ -706,9 +1123,9 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       req.body !== null &&
       (!s.paths || pathMatches(s.paths, req.path))
     ) {
-      let r: ReturnType<typeof sanitizeBody>;
+      let r: Awaited<ReturnType<typeof sanitizeBody>>;
       try {
-        r = sanitizeBody(req.body, s);
+        r = await sanitizeBody(req, req.body, s);
       } catch (err) {
         if (!(err instanceof BodyLimitError)) throw err;
         const reason = err.code === 'body_too_deep' ? 'body-too-deep' : 'body-too-large';
