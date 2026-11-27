@@ -7,7 +7,7 @@ import {
 } from '@prompt-aegis/dom';
 
 // 1. Invisible tarpit + trap links on every page (skipped for search engines).
-const honeypot = injectHoneypot({ seed: location.pathname, trapPath: '/__aegis/trap' });
+const honeypot = injectHoneypot({ seed: location.pathname, trapPath: '/archive' });
 console.info('[aegis] honeypot canary for this page:', honeypot.canary);
 
 const automation = detectAutomation();

@@ -33,10 +33,100 @@ const canaries = [];
 const comments = new Map(ARTICLES.map((a) => [a.slug, []]));
 
 // ── prompt-aegis ────────────────────────────────────────────────────────
+// ── Stealth decoy ─────────────────────────────────────────────────────────
+// A trap page that is hard for a reasoning agent to distinguish from a real
+// article: it reuses the site's own chrome (brand, nav, CSS, lang=zh-Hant),
+// writes Traditional-Chinese content, uses an innocuous archive path, and is
+// deterministic per canary (which the engine seeds per path+day, UA-independent).
+const DECOY = {
+  kinds: ['彙整', '清單', '筆記', '指南', '路線', '口袋名單'],
+  subjects: [
+    '離島潛點',
+    '老街散步',
+    '山屋預約',
+    '夜市小吃',
+    '溫泉路線',
+    '單車環島',
+    '賞鯨季節',
+    '部落共食',
+    '古道健行',
+    '海岸公路',
+  ],
+  bodies: [
+    '沿途的補給點與接駁資訊都標在文末地圖，建議提早一天抵達。',
+    '這條路線坡度平緩、適合新手，全程大約三到四小時。',
+    '旺季人潮較多，清晨與傍晚的光線最適合拍照。',
+    '在地小吃以傳統台菜為主，蚵仔煎與米糕都值得一試。',
+    '住宿需要事先預訂，週末時常客滿。',
+    '沿線訊號時有時無，離線地圖請先下載好。',
+    '入口不太好找，跟著舊鐵道走就會看到指標。',
+    '雨後路面濕滑，記得穿防滑的鞋子。',
+  ],
+  tails: [
+    '資料僅供參考，實際請以現場公告為準。',
+    '歡迎在留言區補充你的私房路線。',
+    '季節限定，出發前請再確認開放時間。',
+  ],
+};
+function decoyRng(seed) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return () => {
+    h += 0x6d2b79f5;
+    let t = Math.imul(h ^ (h >>> 15), 1 | h);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function decoySample(r, arr, n) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, n);
+}
+const decoyLabel = (seed) =>
+  DECOY.subjects[Math.floor(decoyRng(seed)() * DECOY.subjects.length)] +
+  DECOY.kinds[Math.floor(decoyRng(seed + 'k')() * DECOY.kinds.length)];
+function decoyPage(payload) {
+  const r = decoyRng(payload.canary);
+  const title = decoyLabel(payload.canary);
+  const date = payload.meta.match(/updated (\d{4}-\d{2}-\d{2})/)?.[1] ?? '2024-01-01';
+  // The canary rides along as a believable document number (keeps attribution).
+  const meta = `文件編號 ${payload.canary}｜最後更新 ${date}`;
+  const paras = decoySample(r, DECOY.bodies, 3 + Math.floor(r() * 2))
+    .map((p) => `<p>${esc(p)}</p>`)
+    .join('');
+  const tail = `<p class="hint">${esc(DECOY.tails[Math.floor(r() * DECOY.tails.length)])}</p>`;
+  const related = payload.links.length
+    ? `<section class="panel"><h2>相關整理</h2><ul class="articles">${payload.links
+        .map((l) => `<li><a href="${esc(l.href)}">${esc(decoyLabel(l.href))}</a></li>`)
+        .join('')}</ul></section>`
+    : '';
+  const body = `<article data-slug="archive"><h1>${esc(title)}</h1><p class="meta">${esc(meta)}</p>${paras}${tail}</article>${related}`;
+  // Keep the real chrome; add noindex so decoys never reach search engines.
+  return layout(title, body).replace(
+    '<meta charset="utf-8">',
+    '<meta charset="utf-8">\n<meta name="robots" content="noindex,nofollow,noarchive">',
+  );
+}
+
+// ── prompt-aegis ──────────────────────────────────────────────────────────
 const engine = createAegisEngine({
   robotsTxt: true,
-  trapPath: '/__aegis/trap',
-  tarpit: { delayMs: Number(process.env.TARPIT_DELAY_MS ?? 300) },
+  // Innocuous path: the maze links read like a normal content archive, not
+  // "/__aegis/trap" which would announce the honeypot in every decoy link.
+  trapPath: '/archive',
+  tarpit: {
+    delayMs: Number(process.env.TARPIT_DELAY_MS ?? 300),
+    // Decoy pages wear the real site's chrome + Traditional-Chinese content so
+    // a crawler cannot tell a trap apart from a genuine article.
+    render: decoyPage,
+  },
   sanitize: {
     paths: ['/api'],
     fields: ['author', 'body', 'text'],
@@ -53,6 +143,15 @@ const engine = createAegisEngine({
     }
   },
 });
+
+// Test isolation via parent IPC only: no HTTP reset endpoint is exposed.
+if (process.send)
+  process.on('message', async (message) => {
+    if (message !== 'reset-test-flags') return;
+    for (const ip of ['127.0.0.1', '::1', '::ffff:127.0.0.1'])
+      await engine.store.delete?.(`ip:${ip}`);
+    process.send?.('test-flags-reset');
+  });
 
 const app = express();
 app.disable('x-powered-by');

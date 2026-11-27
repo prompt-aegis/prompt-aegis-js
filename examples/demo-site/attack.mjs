@@ -1,13 +1,14 @@
 /**
  * Simulated attacks against the local demo site.
  *
- *   pnpm attack                         # starts the demo site if needed
+ *   pnpm attack                         # starts an isolated demo site (port must be free)
  *   pnpm attack:unprotected             # same attacks, defences off (node attack.mjs --unprotected)
  *   BASE=http://127.0.0.1:3070 pnpm attack
  *
  * Only ever targets localhost. Exit code 1 if any defence fails.
  */
 import { spawn } from 'node:child_process';
+import { clearTimeout } from 'node:timers';
 import { networkInterfaces } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,12 +26,12 @@ if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(BASE)) {
 const CHROME =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 const uid = () => Math.random().toString(36).slice(2, 8);
-/** Unique browser UA per test so flags from one test never leak into another. */
+/** Vary browser UAs; parent IPC resets IP flags between independent tests. */
 const browser = () => `${CHROME} demo/${uid()}`;
 const tag = (s) => Array.from(s, (c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join('');
 const REAL = '大稻埕'; // text that only appears in the real article
 const ARTICLE = '/articles/taipei-coffee';
-const CANARY = /aegis-[A-Za-z]+-[0-9a-f]{6}/;
+const CANARY = /doc-[A-Za-z]+-[0-9a-f]{6}/;
 
 async function http(path, { ua = browser(), method = 'GET', headers = {}, json, raw } = {}) {
   const t0 = performance.now();
@@ -98,16 +99,16 @@ const groups = [
             r.status === 200 &&
             !r.text.includes(REAL) &&
             CANARY.test(r.text) &&
-            /noindex/.test(r.headers.get('x-robots-tag') ?? '');
+            /noindex/.test(r.text);
           return [ok, `canary ${r.text.match(CANARY)?.[0]}，延遲 ${r.ms}ms`];
         },
       ]),
       [
-        '不同爬蟲拿到不同 Canary（可追溯）',
+        '不同爬蟲拿到相同文件 Canary（無 UA 差異指紋）',
         async () => {
           const a = (await http(ARTICLE, { ua: 'GPTBot/1.2' })).text.match(CANARY)?.[0];
           const b = (await http(ARTICLE, { ua: 'CCBot/2.0' })).text.match(CANARY)?.[0];
-          return [a && b && a !== b, `${a} ≠ ${b}`];
+          return [a && b && a === b, `${a} = ${b}`];
         },
       ],
       [
@@ -116,7 +117,7 @@ const groups = [
           const r = await http('/robots.txt');
           const ok =
             /User-agent: GPTBot\nDisallow: \//.test(r.text) &&
-            r.text.includes('Disallow: /__aegis/trap/');
+            /^Disallow: \/archive$/m.test(r.text);
           return [
             ok,
             `${r.text.split('\n').filter((l) => l.startsWith('User-agent')).length} 個規則`,
@@ -128,7 +129,7 @@ const groups = [
         async () => {
           const ua = `Mozilla/5.0 (compatible; SneakyScraper/${uid()})`; // not in any bot list
           const before = await http(ARTICLE, { ua });
-          await http('/__aegis/trap/ledger-1', { ua }); // ignored robots.txt Disallow
+          await http('/archive', { ua }); // ignored robots.txt Disallow
           const after = await http(ARTICLE, { ua });
           return [
             before.text.includes(REAL) && !after.text.includes(REAL),
@@ -137,19 +138,22 @@ const groups = [
         },
       ],
       [
-        '同一 IP 的其他使用者不受影響',
+        '同一 IP 更換 UA 仍會被標記',
         async () => {
           const scraper = `Scraper/${uid()}`;
-          await http('/__aegis/trap/x', { ua: scraper });
-          const human = await http(ARTICLE); // same 127.0.0.1, different UA
-          return [human.text.includes(REAL), '爬蟲被標記，同 IP 的瀏覽器照常瀏覽'];
+          await http('/archive', { ua: scraper });
+          const human = await http(ARTICLE); // same 127.0.0.1, different UA: the flag must survive
+          return [
+            !human.text.includes(REAL) && CANARY.test(human.text),
+            '同 IP 換 UA 仍拿到誘餌；共用 NAT 需自訂身分鍵',
+          ];
         },
       ],
       [
         '跨站 <img> 觸發陷阱不會封鎖訪客',
         async () => {
           const ua = browser();
-          await http('/__aegis/trap/img', {
+          await http('/archive', {
             ua,
             headers: {
               'sec-fetch-site': 'cross-site',
@@ -165,7 +169,7 @@ const groups = [
         'AI 瀏覽器代理點擊隱藏連結會被標記',
         async () => {
           const ua = browser();
-          await http('/__aegis/trap/link', {
+          await http('/archive', {
             ua,
             headers: {
               'sec-fetch-site': 'same-origin',
@@ -181,7 +185,7 @@ const groups = [
         '偽造 X-Forwarded-For 無法嫁禍他人',
         async () => {
           const ua = `Scraper/${uid()}`;
-          await http('/__aegis/trap/xff', { ua, headers: { 'x-forwarded-for': '203.0.113.7' } });
+          await http('/archive', { ua, headers: { 'x-forwarded-for': '203.0.113.7' } });
           // The real socket IP got flagged, not the spoofed one: same UA without the header is tarpitted.
           const r = await http(ARTICLE, { ua });
           return [!r.text.includes(REAL), '標記的是真實來源 IP，而不是偽造的 203.0.113.7'];
@@ -436,7 +440,6 @@ async function page(path) {
 const SAFE_PREFIXES = [
   '一般瀏覽器',
   'Googlebot',
-  '同一 IP',
   '跨站',
   '不誤判',
   '正常摘要',
@@ -463,7 +466,9 @@ async function ensureServer() {
       );
       process.exit(2);
     }
-    return null;
+    throw new Error(
+      `${BASE} 已有 demo 執行中。請先停止或指定空閒的 BASE 埠，測試需獨立程序以重設 IP 標記。`,
+    );
   }
   {
     const here = dirname(fileURLToPath(import.meta.url));
@@ -476,7 +481,7 @@ async function ensureServer() {
         TARPIT_DELAY_MS: '200',
         ...(UNPROTECTED ? { AEGIS_OFF: '1' } : {}),
       },
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
     });
     for (let i = 0; i < 50; i++) {
       await new Promise((r) => setTimeout(r, 200));
@@ -502,6 +507,20 @@ for (const group of groups) {
     let ok = false;
     let detail = '';
     try {
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          child.off('message', onMessage);
+          reject(new Error('reset timeout'));
+        }, 5000);
+        const onMessage = (message) => {
+          if (message !== 'test-flags-reset') return;
+          clearTimeout(timeout);
+          child.off('message', onMessage);
+          resolve();
+        };
+        child.on('message', onMessage);
+        child.send('reset-test-flags');
+      });
       [ok, detail] = await fn();
     } catch (err) {
       detail = `錯誤：${err.message}`;

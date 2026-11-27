@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { buildTarpitPayload } from '@prompt-aegis/core';
 import querystring from 'node:querystring';
 import {
   aegisExpress,
@@ -12,7 +13,7 @@ const CHROME =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 Chrome/130.0 Safari/537.36';
 const SCRAPER = 'Mozilla/5.0 (compatible; SomeScraper/1.0)';
 const fast = { tarpit: { delayMs: 0 } };
-const TRAP = '/__aegis/trap/ledger-x';
+const TRAP = '/documents/archive';
 
 /** Drive the Express adapter with a fake req/res; resolves to 'next' | 'tarpit' | status code. */
 function expressClient(options: AdapterOptions) {
@@ -87,7 +88,7 @@ describe('trap path cannot be weaponised against real users', () => {
     ...fetchHeaders,
   });
 
-  it('a cross-site <img src="/__aegis/trap"> does not flag the visitor', async () => {
+  it('a cross-site <img src="/documents/archive"> does not flag the visitor', async () => {
     const get = expressClient(fast);
     const first = await get(
       TRAP,
@@ -132,11 +133,39 @@ describe('trap path cannot be weaponised against real users', () => {
     expect(await get('/x', { 'user-agent': SCRAPER }, '1.1.1.4')).toBe('tarpit');
   });
 
-  it('flags are keyed by IP + User-Agent so other people behind the same NAT are unaffected', async () => {
+  it('default IP flags survive User-Agent rotation', async () => {
     const get = expressClient(fast);
     await get(TRAP, { 'user-agent': SCRAPER }, '100.64.0.1');
     expect(await get('/', { 'user-agent': SCRAPER }, '100.64.0.1')).toBe('tarpit');
-    expect(await get('/', { 'user-agent': CHROME }, '100.64.0.1')).toBe('next');
+    expect(await get('/', { 'user-agent': CHROME }, '100.64.0.1')).toBe('tarpit');
+  });
+
+  it('verified session identities isolate shared NAT users without trusting UA', async () => {
+    const sessions = new Map([
+      ['session=valid-a', 'account-a'],
+      ['session=valid-b', 'account-b'],
+    ]);
+    const identity = (headers: Record<string, string | string[] | undefined>) => {
+      const cookie = headers.cookie;
+      return typeof cookie === 'string' ? sessions.get(cookie) : undefined;
+    };
+    const engine = createAegisEngine({
+      ...fast,
+      access: { paths: ['/private'], verify: (req) => Boolean(identity(req.headers)) },
+      flagKey: (req) => identity(req.headers) ?? (req.ip ? `ip:${req.ip}` : null),
+    });
+    const hit = (path: string, cookie: string, ua = CHROME) =>
+      engine.inspect({
+        method: 'GET',
+        path,
+        ip: '100.64.0.10',
+        headers: { cookie, 'user-agent': ua },
+      });
+    await hit(TRAP, 'session=valid-a');
+    expect((await hit('/private', 'session=valid-a', `${CHROME} rotated`)).action).toBe('tarpit');
+    expect((await hit('/private', 'session=valid-b')).action).toBe('next');
+    expect((await hit('/private', 'session=forged')).response!.status).toBe(403);
+    expect((await hit('/private', '')).response!.status).toBe(403);
   });
 
   it('flagKey can be overridden (e.g. IP only)', async () => {
@@ -192,19 +221,131 @@ describe('body screening robustness', () => {
 });
 
 describe('tarpit', () => {
-  it('gives each crawler its own canary so leaks can be attributed', async () => {
-    const engine = createAegisEngine(fast);
+  it('uses a deployment secret rather than public path/day to generate content', async () => {
+    const request = { method: 'GET', path: '/pricing', headers: { 'user-agent': 'GPTBot/1.2' } };
+    const make = (secret?: string) => createAegisEngine({ tarpit: { delayMs: 0, secret } });
+    const a = make('deployment-one-very-long-test-secret');
+    const body = (await a.inspect(request)).response!.body;
+    expect((await a.inspect(request)).response!.body).toBe(body);
+    expect(
+      (await make('deployment-one-very-long-test-secret').inspect(request)).response!.body,
+    ).toBe(body);
+    expect(
+      (await make('deployment-two-very-long-test-secret').inspect(request)).response!.body,
+    ).not.toBe(body);
+    expect((await make().inspect(request)).response!.body).not.toBe(
+      (await make().inspect(request)).response!.body,
+    );
+    const publicPayload = buildTarpitPayload({
+      seed: `${request.path}|${new Date().toISOString().slice(0, 10)}`,
+      paragraphs: 4,
+    });
+    expect(publicPayload.paragraphs.some((p) => body.includes(p))).toBe(false);
+    expect(body).not.toContain('deployment-one-very-long-test-secret');
+    expect(() => make('')).toThrow('tarpit.secret must not be empty');
+  });
+
+  it('keeps document content and identity stable over midnight', async () => {
+    vi.useFakeTimers();
+    try {
+      const engine = createAegisEngine(fast);
+      const request = { method: 'GET', path: '/pricing', headers: { 'user-agent': 'GPTBot/1.2' } };
+      vi.setSystemTime(new Date('2026-11-26T23:59:00Z'));
+      const before = (await engine.inspect(request)).response!.body;
+      vi.setSystemTime(new Date('2026-11-27T00:01:00Z'));
+      const after = (await engine.inspect(request)).response!.body;
+      expect(after).toBe(before);
+      const mask = (html: string) => html.replace(/doc-[A-Za-z]+-[0-9a-f]{6}/g, 'CANARY');
+      expect(mask(after)).toBe(mask(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('honours links: 0 with the default leaf rate', async () => {
+    const engine = createAegisEngine({ tarpit: { delayMs: 0, links: 0 } });
+    for (let i = 0; i < 20; i++) {
+      const result = await engine.inspect({
+        method: 'GET',
+        path: `/articles/${i}`,
+        headers: { 'user-agent': 'GPTBot/1.2' },
+      });
+      expect(result.response!.body).not.toContain('Related documents');
+    }
+  });
+
+  it('can opt into per-crawler attribution with visible differences', async () => {
+    const engine = createAegisEngine({ tarpit: { delayMs: 0, canaryScope: 'crawler-day' } });
     const canary = async (ua: string) => {
       const d = await engine.inspect({
         method: 'GET',
         path: '/pricing',
         headers: { 'user-agent': ua },
       });
-      return d.response!.body.match(/aegis-[A-Za-z]+-[0-9a-f]{6}/)![0];
+      return d.response!.body.match(/doc-[A-Za-z]+-[0-9a-f]{6}/)![0];
     };
     const gpt = await canary('Mozilla/5.0 (compatible; GPTBot/1.2)');
     expect(await canary('Mozilla/5.0 (compatible; GPTBot/1.2)')).toBe(gpt); // stable per crawler
     expect(await canary('CCBot/2.0 (https://commoncrawl.org/faq/)')).not.toBe(gpt);
+  });
+
+  it('does not announce the page as decoy by default, but still embeds a canary', async () => {
+    const engine = createAegisEngine(fast);
+    const d = await engine.inspect({
+      method: 'GET',
+      path: '/pricing',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2)' },
+    });
+    const body = d.response!.body.toLowerCase();
+    expect(body).not.toContain('synthetic decoy'); // no white flag for a reasoning agent
+    expect(body).not.toContain('automated agents');
+    expect(d.response!.body).toMatch(/doc-[A-Za-z]+-[0-9a-f]{6}/); // attribution still works
+  });
+
+  it('tarpit.notice re-enables the deterrent notice for compliant scrapers', async () => {
+    const engine = createAegisEngine({ tarpit: { delayMs: 0, notice: true } });
+    const d = await engine.inspect({
+      method: 'GET',
+      path: '/pricing',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2)' },
+    });
+    expect(d.response!.body).toContain('synthetic decoy data');
+  });
+
+  it('tarpit.canaryPrefix replaces the recognisable default marker', async () => {
+    const engine = createAegisEngine({ tarpit: { delayMs: 0, canaryPrefix: 'acme' } });
+    const d = await engine.inspect({
+      method: 'GET',
+      path: '/pricing',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2)' },
+    });
+    expect(d.response!.body).toMatch(/acme-[A-Za-z]+-[0-9a-f]{6}/); // custom marker
+    expect(d.response!.body).not.toContain('aegis-'); // default tell is gone
+  });
+
+  it('serves identical documents including canaries across crawler UAs', async () => {
+    const engine = createAegisEngine(fast);
+    const page = async (ua: string) =>
+      (await engine.inspect({ method: 'GET', path: '/pricing', headers: { 'user-agent': ua } }))
+        .response!.body;
+    const maskCanary = (html: string) => html.replace(/doc-[A-Za-z]+-[0-9a-f]{6}/g, 'CANARY');
+    const gpt = await page('Mozilla/5.0 (compatible; GPTBot/1.2)');
+    const cc = await page('CCBot/2.0 (https://commoncrawl.org/faq/)');
+    // Same visible content once the canary is masked — a page that changed with
+    // the UA would itself be a tell…
+    expect(maskCanary(gpt)).toBe(maskCanary(cc));
+    expect(gpt).toBe(cc);
+  });
+
+  it('tarpit responses do not carry stand-out headers by default', async () => {
+    const engine = createAegisEngine(fast);
+    const d = await engine.inspect({
+      method: 'GET',
+      path: '/pricing',
+      headers: { 'user-agent': 'Mozilla/5.0 (compatible; GPTBot/1.2)' },
+    });
+    expect(d.response!.headers['x-robots-tag']).toBeUndefined(); // no aggressive header tell
+    expect(d.response!.body).toContain('noindex'); // noindex still enforced in-page
   });
 
   it('caps concurrent delayed responses so slow tarpits cannot exhaust the server', async () => {
@@ -218,7 +359,9 @@ describe('tarpit', () => {
     };
     const results = await Promise.all([hit(), hit(), hit(), hit(), hit(), hit()]);
     expect(results.every((r) => r.status === 200)).toBe(true);
-    const delayed = results.filter((r) => r.ms >= 250).length;
+    // Delay is jittered (0.5×–1.5× = 150–450ms here), so a held response is
+    // anything clearly above the near-zero immediate ones, not exactly 300ms.
+    const delayed = results.filter((r) => r.ms >= 100).length;
     expect(delayed).toBe(2); // only `maxConcurrent` connections are held open; the rest answer at once
   });
 

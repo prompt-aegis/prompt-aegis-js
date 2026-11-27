@@ -16,8 +16,10 @@ describe('React', () => {
     );
     expect(a).toBe(b);
     expect(a).toContain('aria-hidden="true"');
-    expect(a).toContain('data-aegis-honeypot="aegis-');
-    expect(a).toContain('href="/__aegis/trap/');
+    expect(a).toContain('data-cref'); // neutral marker, not a self-labelling attribute
+    expect(a).not.toContain('honeypot'); // never leak what it is
+    expect(a).toMatch(/doc-[A-Za-z]+-[0-9a-f]{6}/); // canary present (in the meta line)
+    expect(a).toContain('href="/__aegis/trap"');
     expect(a).toContain('left:-10000px');
   });
 });
@@ -29,7 +31,7 @@ describe('Vue', () => {
     document.body.appendChild(root);
     createApp({ render: () => h(VueHoneypot, { seed: 'x', trapPath: '/t', onTrap }) }).mount(root);
     await nextTick();
-    const el = root.querySelector('[data-aegis-honeypot]') as HTMLElement;
+    const el = root.querySelector('[data-cref]') as HTMLElement;
     expect(el.getAttribute('aria-hidden')).toBe('true');
     el.querySelector('a')!.click();
     expect(onTrap).toHaveBeenCalledWith(expect.objectContaining({ type: 'link-click' }));

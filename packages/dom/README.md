@@ -69,7 +69,7 @@ const dispose = guardInput(document.querySelector<HTMLTextAreaElement>('#chat')!
 });
 
 // 步驟 2：在頁面加入隱形蜜罐
-const honeypot = injectHoneypot({ seed: location.pathname, trapPath: '/__aegis/trap' });
+const honeypot = injectHoneypot({ seed: location.pathname, trapPath: '/documents/archive' });
 saveCanary(location.pathname, honeypot.canary); // 自行記錄，日後比對外洩
 
 // 卸載時
@@ -142,6 +142,11 @@ guardForm(document.querySelector('form#ask')!, {
 - `aria-hidden="true"`：螢幕閱讀器略過
 - `inert`、`tabindex="-1"`：無法聚焦或點擊
 - `data-nosnippet`：不出現在搜尋摘要
+- `data-cref`（空值）：供本套件的掃描器略過自家蜜罐用的中性標記。**不會**把 canary 放進屬性（以免被採集）；canary 只存在於隱藏區塊的文字中
+
+Node 引擎只接受精確陷阱入口與伺服器簽發的子連結。`trapPath` 現在會產生單一入口連結；瀏覽器端自訂 `maze` 的隨機路徑不具簽章，不可直接當作 Node 引擎有效子頁。
+
+> 蜜罐預設關閉 `notice`，自動產生的 canary 字首為 `doc`。若要顯示勸退聲明，可明確傳入 `notice: DEFAULT_AGENT_NOTICE`。直接呼叫 `createCanary()` 仍預設使用 `aegis`，可用 `createCanary({ prefix: 'DOC' })` 覆寫。`aria-hidden`、`inert` 與隱藏樣式會保留，避免影響正常使用者；能檢查 DOM 的 agent 仍可辨識並略過隱藏區塊。
 
 **搜尋引擎**：預設不會對 Googlebot、Bingbot 等搜尋引擎爬蟲顯示蜜罐（`skipSearchEngines: true`）。隱藏文字可能被搜尋引擎視為垃圾內容，而這些爬蟲本來就會遵守 robots.txt。若希望只對可疑流量放蜜罐，可以搭配 `detectAutomation()`：
 
@@ -172,7 +177,7 @@ injectHoneypot(options?: HoneypotOptions): HoneypotHandle
 ```ts
 const hp = injectHoneypot({
   seed: location.pathname, // 同一頁面每次產生相同內容
-  trapPath: '/__aegis/trap',
+  trapPath: '/documents/archive',
   onTrap: (e) => navigator.sendBeacon('/api/bot-report', JSON.stringify(e)),
 });
 ```
@@ -208,7 +213,7 @@ buildHoneypotSpec(options?: TarpitOptions & { trapPath?: string }): HoneypotSpec
 
 產生與框架無關的蜜罐描述 `{ attrs, style, payload }`，可用於自訂渲染（例如 Svelte、Solid、伺服器模板）。相關常數：
 
-- `HONEYPOT_ATTR`：`'data-aegis-honeypot'`
+- `HONEYPOT_ATTR`：`'data-cref'`（中性標記，不自曝是蜜罐）
 - `HIDDEN_STYLE`：隱藏用的 CSS 屬性物件
 
 ## 頁面內容檢查
@@ -305,7 +310,7 @@ export function Chat({ reply }: { reply: string }) {
       <Markdown>{safeReply}</Markdown>
       <textarea ref={inputRef} />
       {automated && <p>偵測到自動化環境</p>}
-      <AegisHoneypot seed="/chat" trapPath="/__aegis/trap" onTrap={(e) => report(e)} />
+      <AegisHoneypot seed="/chat" trapPath="/documents/archive" onTrap={(e) => report(e)} />
     </>
   );
 }
@@ -335,7 +340,7 @@ createApp(App).use(PromptAegis).mount('#app');
 ```vue
 <template>
   <textarea v-aegis-guard="{ blockPasteAt: 0.85, onDetect }" />
-  <AegisHoneypot seed="/chat" trap-path="/__aegis/trap" @trap="onTrap" />
+  <AegisHoneypot seed="/chat" trap-path="/documents/archive" @trap="onTrap" />
 </template>
 
 <script setup lang="ts">

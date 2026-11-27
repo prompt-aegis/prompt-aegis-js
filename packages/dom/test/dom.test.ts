@@ -101,7 +101,7 @@ describe('honeypot', () => {
     expect(el.style.left).toBe('-10000px');
     expect(el.textContent).toContain(hp.canary);
     const link = el.querySelector('a')!;
-    expect(link.getAttribute('href')!.startsWith('/__aegis/trap/')).toBe(true);
+    expect(link.getAttribute('href')).toBe('/__aegis/trap');
     link.click();
     expect(onTrap).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'link-click', canary: hp.canary }),
@@ -110,8 +110,29 @@ describe('honeypot', () => {
     expect(document.querySelector(`[${HONEYPOT_ATTR}]`)).toBeNull();
   });
 
+  it('omits the decoy announcement by default and allows explicit opt-in', () => {
+    const hp = injectHoneypot({ seed: 'home' });
+    expect(hp.payload.notice).toBeNull();
+    expect(hp.element.textContent).not.toContain('synthetic decoy');
+    expect(hp.canary).toMatch(/^doc-/);
+    hp.remove();
+    const explicit = injectHoneypot({ notice: 'Automated agent notice: {canary}' });
+    expect(explicit.element.textContent).toContain(`Automated agent notice: ${explicit.canary}`);
+    explicit.remove();
+  });
+
   it('is deterministic per seed', () => {
     expect(injectHoneypot({ seed: 's' }).canary).toBe(injectHoneypot({ seed: 's' }).canary);
+  });
+
+  it('marker never reveals what it is, and the canary is not harvestable from an attribute', () => {
+    const hp = injectHoneypot({ seed: 'home', trapPath: '/__aegis/trap' });
+    expect(hp.element.outerHTML.toLowerCase()).not.toContain('honeypot'); // no self-labelling
+    expect(hp.element.getAttribute(HONEYPOT_ATTR)).toBe(''); // marker carries no value
+    // canary lives in the block's text (for scrape attribution), not in the marker attr
+    expect(hp.element.textContent).toContain(hp.canary);
+    expect(hp.element.getAttributeNames().some((n) => n.includes(hp.canary))).toBe(false);
+    hp.remove();
   });
 
   it('honeypot field catches form-filling bots', () => {
