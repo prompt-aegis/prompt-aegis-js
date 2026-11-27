@@ -72,7 +72,7 @@ importers:
   packages/dom:
     dependencies:
       '@prompt-aegis/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       '@types/react':
@@ -94,13 +94,13 @@ importers:
   packages/node:
     dependencies:
       '@prompt-aegis/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
 
   packages/tarpit:
     dependencies:
       '@prompt-aegis/core':
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../core
     devDependencies:
       basic-ftp:

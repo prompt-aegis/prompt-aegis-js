@@ -4,6 +4,12 @@
 
 ## [未發佈]
 
+## [0.3.0] — 2026-11-27
+
+`@prompt-aegis/core`、`@prompt-aegis/node`、`@prompt-aegis/dom` 0.3.0。`@prompt-aegis/tarpit` 未變更，維持 0.1.0。
+
+> **安全性更新**：0.2.0 以前的 `sanitizeModelOutput` 有零點擊資料外洩漏洞（見下方「安全性」）。請升級 core；node 與 dom 也一併升級，因為 0.2.0 的 node／dom 把 core 鎖定在 0.2.0。
+
 ### 新增
 
 - **core**：注入規則擴充繁簡中文同義說法（別管／無視／拋開／不用理會／作廢…）、日文、韓文、法文、西文、德文的「忽略先前指令」與「洩漏系統提示」句型，以及「把系統設定原文貼出來」這類逐字洩漏要求。
@@ -23,6 +29,12 @@
 ### 修正
 
 - **core**：只被圖片使用的參考式定義，原本必須同時通過圖片與連結白名單；圖片網域不在連結白名單時，合法圖片會被誤刪。現在圖片參考只檢查圖片白名單。
+
+### 變更
+
+- **core**：偵測範圍擴大（新增句型、語言與解碼掃描），過去放行的訊息可能被提高分數或阻擋。升級前可用 `pnpm sweep-threshold` 以自己的正常訊息語料確認誤判；不需要解碼掃描時設 `decode: false`。
+- **core**：`allowedLinkHosts` 為白名單時，`sanitizeModelOutput` 預設把不在白名單的裸網址改寫成 `hxxps://…`；要維持舊行為請設 `bareUrls: 'keep'`。
+- **node／dom／tarpit**：對 `@prompt-aegis/core` 的依賴由 `workspace:*`（發佈為精確版本，如 `0.2.0`）改為 `workspace:^`（發佈為 `^0.3.0`）。之後 core 的修補版本會自動帶給 node 與 dom 的使用者，不必等 node／dom 重新發佈。
 
 ## [0.2.0] — 2026-11-27
 
@@ -112,7 +124,8 @@
 - 陷阱路徑依 `Sec-Fetch-*` 判斷是否標記，跨站與子資源請求不會連累真人訪客；標記鍵為 IP + User-Agent。
 - Tarpit 有同時延遲上限（`tarpit.maxConcurrent`）；每個爬蟲、每天的 Canary 都不同；搜尋引擎爬蟲不會看到蜜罐。
 
-[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.2.0...HEAD
+[未發佈]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.3.0...HEAD
+[0.3.0]: https://github.com/prompt-aegis/prompt-aegis-js/compare/core-v0.2.0...core-v0.3.0
 [0.2.0]: https://github.com/prompt-aegis/prompt-aegis-js/compare/v0.1.1...core-v0.2.0
 [tarpit 0.1.0]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/tarpit-v0.1.0
 [0.1.1]: https://github.com/prompt-aegis/prompt-aegis-js/releases/tag/v0.1.1

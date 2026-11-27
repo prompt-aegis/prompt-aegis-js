@@ -52,7 +52,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@prompt-aegis/core": "workspace:*"
+    "@prompt-aegis/core": "workspace:^"
   },
   "publishConfig": {
     "access": "public"

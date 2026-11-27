@@ -1,6 +1,6 @@
 {
   "name": "@prompt-aegis/dom",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Browser-side defenses: input guards, DOM honeypots / agent tarpits, hidden-injection scanner, React & Vue bindings.",
   "license": "MIT",
   "repository": {
@@ -69,7 +69,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@prompt-aegis/core": "workspace:*"
+    "@prompt-aegis/core": "workspace:^"
   },
   "peerDependencies": {
     "react": ">=17",
