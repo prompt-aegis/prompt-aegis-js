@@ -293,6 +293,8 @@ classifyUserAgent(userAgent: string | null | undefined, options?: ClassifyOption
 | `includeAutomation` | `boolean`        | `true` | 是否辨識 HTTP 函式庫與無頭瀏覽器 |
 | `extraSignatures`   | `BotSignature[]` | `[]`   | 自訂特徵（優先比對）             |
 
+比對前會先正規化 UA：移除零寬字元、NFKC、把希臘／西里爾同形字轉回拉丁字母。AI 爬蟲名稱另外以「去掉所有空白與符號」的方式比對，所以 `GPT Bot`、`GPT_Bot`、`G.P.T-Bot`、`GPTB​ot` 都會被認出（只套用在 AI 爬蟲清單；`curl`、`java` 這類短名稱不套用，避免誤判一般瀏覽器）。`normalizeUserAgent(ua)` 可取得正規化後的字串。
+
 **BotClassification**：`{ isBot, category, name, operator, missingUserAgent }`
 
 | category       | 說明               | 範例                                                     |

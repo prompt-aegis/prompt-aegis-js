@@ -1,3 +1,5 @@
+import { normalizeForMatching, stripInvisible } from './unicode';
+
 /**
  * User-agent based classification of AI crawlers and generic scrapers.
  *
@@ -257,6 +259,46 @@ export const AI_BOT_SIGNATURES: BotSignature[] = [
     pattern: /iaskspider/i,
     robotsToken: 'iaskspider',
   },
+  // Further AI crawlers / agents (sources: operator docs and the community
+  // ai.robots.txt list). Names double as robots.txt tokens where honoured.
+  ...(
+    [
+      ['DeepSeekBot', 'DeepSeek', 'ai-training'],
+      ['Brightbot', 'Bright Data', 'ai-training'],
+      ['TikTokSpider', 'ByteDance', 'ai-training'],
+      ['Cotoyogi', 'ROIS', 'ai-training'],
+      ['ICC-Crawler', 'NICT', 'ai-training'],
+      ['Webzio-Extended', 'Webz.io', 'ai-training'],
+      ['VelenPublicWebCrawler', 'Velen', 'ai-training'],
+      ['SBIntuitionsBot', 'SB Intuitions', 'ai-training'],
+      ['Panscient', 'Panscient', 'ai-training'],
+      ['Crawlspace', 'Crawlspace', 'ai-training'],
+      ['FriendlyCrawler', 'unknown', 'ai-training'],
+      ['Factset_spyderbot', 'FactSet', 'ai-training'],
+      ['Poseidon Research Crawler', 'Poseidon', 'ai-training'],
+      ['Sidetrade indexer bot', 'Sidetrade', 'ai-training'],
+      ['Datenbank Crawler', 'unknown', 'ai-training'],
+      ['aiHitBot', 'aiHit', 'ai-training'],
+      ['YandexAdditional', 'Yandex', 'ai-training'],
+      ['PhindBot', 'Phind', 'ai-search'],
+      ['LinerBot', 'Liner', 'ai-search'],
+      ['Andibot', 'Andi', 'ai-search'],
+      ['bigsur.ai', 'Big Sur AI', 'ai-search'],
+      ['Gemini-Deep-Research', 'Google', 'ai-assistant'],
+      ['GoogleAgent-Mariner', 'Google', 'ai-assistant'],
+      ['ChatGPT Agent', 'OpenAI', 'ai-assistant'],
+      ['NovaAct', 'Amazon', 'ai-assistant'],
+      ['Devin', 'Cognition', 'ai-assistant'],
+      ['QuillBot', 'QuillBot', 'ai-assistant'],
+      ['FirecrawlAgent', 'Firecrawl', 'automation'],
+    ] as const
+  ).map(([name, operator, category]): BotSignature => ({
+    name,
+    operator,
+    category,
+    pattern: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s*'), 'i'),
+    robotsToken: name,
+  })),
 ];
 
 export const AUTOMATION_SIGNATURES: BotSignature[] = [
@@ -333,19 +375,34 @@ export function classifyUserAgent(
     ...AI_BOT_SIGNATURES,
     ...((options.includeAutomation ?? true) ? AUTOMATION_SIGNATURES : []),
   ];
-  for (const s of sigs) {
-    if (s.pattern.test(ua)) {
-      return {
-        isBot: true,
-        category: s.category,
-        name: s.name,
-        operator: s.operator,
-        missingUserAgent: false,
-      };
-    }
+  const hit = (s: BotSignature): BotClassification => ({
+    isBot: true,
+    category: s.category,
+    name: s.name,
+    operator: s.operator,
+    missingUserAgent: false,
+  });
+  // 1. Exact signature patterns on the raw UA, then on its normalised form
+  //    (zero-width characters removed, NFKC, Greek / Cyrillic look-alikes folded).
+  const normalized = normalizeUserAgent(ua);
+  for (const s of sigs) if (s.pattern.test(ua) || s.pattern.test(normalized)) return hit(s);
+  // 2. Disguised AI-crawler names: "GPT Bot", "GPT_Bot", "G.P.T-Bot", "GPTB\u200Bot".
+  //    Compare with every separator removed. Only AI signatures (and extra ones)
+  //    — short library names like "curl" or "java" would match ordinary words.
+  const squashed = squash(normalized);
+  for (const s of [...(options.extraSignatures ?? []), ...AI_BOT_SIGNATURES]) {
+    const token = squash(s.name);
+    if (token.length >= 5 && squashed.includes(token)) return hit(s);
   }
   return { isBot: false, category: null, name: null, operator: null, missingUserAgent: false };
 }
+
+/** Strip invisible characters, NFKC-normalise and fold look-alike letters. */
+export function normalizeUserAgent(ua: string): string {
+  return normalizeForMatching(stripInvisible(ua, { collectFindings: false }).text);
+}
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 export interface RobotsTxtOptions {
   /** Categories of AI bots to disallow. Default: `['ai-training']`. */

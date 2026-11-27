@@ -10,6 +10,9 @@
 - **core**：`detectInjection` 會掃描解碼後的內容（`decode` 選項，預設開啟）：可解成可讀文字的 Base64 片段一律解碼；內文提到 ROT13、反轉、解碼時，也掃描 ROT13 與反轉後的版本。解碼後命中規則會加上 high 等級的 `obfuscation.encoded-payload`。
 - **node**：`sanitize.conversationFields` 把多則訊息合併後再評分，擋下拆成兩則各自無害訊息的攻擊；`sanitize.forbidRoles` 拒絕前端送出的 `system`／`developer` 訊息。
 - **node**：`sanitize.detector` 可接上模型型偵測器，分數與規則分數合併；支援逾時（`detectorTimeoutMs`）、並行上限（`detectorConcurrency`）與失效處理（`detectorFailure`，預設 `open` 並發出 `error` 事件）。
+- **core**：UA 比對前先正規化（移除零寬字元、NFKC、同形字轉換），AI 爬蟲名稱另以去除空白與符號的方式比對，`GPT Bot`、`GPT_Bot`、`GPTB​ot`、`GPTBοt`（希臘字母）都能辨識；新增 `normalizeUserAgent`。AI 爬蟲清單新增 DeepSeekBot、Brightbot、TikTokSpider、Cotoyogi、ICC-Crawler、PhindBot、LinerBot、Gemini-Deep-Research、NovaAct、FirecrawlAgent 等 28 個。
+- **node**：`bots.verifySearchEngines` 以反查 DNS 加正向確認驗證自稱搜尋引擎的用戶端，冒充者預設送誘餌頁；新增 `claimedSearchEngineDomains`。
+- **node**：`trapMode: 'strict'` 讓陷阱不再信任 `Sec-Fetch-*` 標頭，適合內部系統；`rateLimit` 提供每個用戶端的固定視窗限流（429 加 `Retry-After`，或改送誘餌頁）。
 - 新增 `pnpm sweep-threshold`：用自己的攻擊與正常語料，列出各門檻的攔截率與誤判率，作為設定 `blockThreshold` 的依據。
 
 ### 安全性
