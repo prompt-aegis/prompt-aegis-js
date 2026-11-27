@@ -244,16 +244,19 @@ sanitizeModelOutput(markdown: string, options?: SanitizeOutputOptions): Sanitize
 - **原始 HTML**：預設跳脫成文字（`<` → `&lt;`），因此 `srcset`、`poster`、CSS `url()`、`<iframe>` 等所有載入管道都會失效。
 - **Markdown 圖片**：依 CommonMark 規則解析（含單引號／括號標題、角括號網址、巢狀方括號、參考式圖片）；目標網域不在白名單，或無法解析時，圖片會被移除或把 `!` 跳脫成一般文字。
 - **程式碼**：圍欄程式碼區塊（` ``` `、`~~~`）與行內程式碼完全不處理。
+- **網域判斷以「渲染後」的網址為準**：先依 CommonMark 規則還原反斜線跳脫與字元實體，再判斷網域。例如 `https://允許網域\@evil.example` 渲染後會變成 `https://允許網域@evil.example`（真正的主機是 `evil.example`），會被正確移除。遠端網址只要含 `\`，或含無法安全解碼的字元實體，一律視為不安全。
+- **裸網址**：`allowedLinkHosts` 為白名單時，文字中不在白名單的裸網址（`https://…`、`www.…`）會被改寫成無法自動連結的形式（`hxxps://…`、`www[.]…`）。marked 預設的 GFM、markdown-it 的 `linkify` 會把這類文字自動變成連結，若不處理就會繞過 `allowedLinkHosts`。
 
 **SanitizeOutputOptions**
 
-| 選項                | 型別                              | 預設值              | 說明                                                                                                                                                                                      |
-| :------------------ | :-------------------------------- | :------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `allowedImageHosts` | `string[]`                        | `[]`                | 允許的圖片網域，支援 `*.example.com`；相對路徑一律允許，`data:` 一律移除                                                                                                                  |
-| `allowedLinkHosts`  | `string[] \| '*'`                 | `'*'`               | 允許的連結網域；`'*'` 時仍會移除 `javascript:`、`vbscript:`、`data:`、`file:`                                                                                                             |
-| `html`              | `'escape' \| 'filter' \| 'allow'` | `'escape'`          | `escape`：HTML 顯示為文字（保留 `<https://…>` 自動連結）；`filter`：保留安全標籤，移除危險標籤與網址不在白名單的標籤，無法解析的一律跳脫；`allow`：不處理（僅限渲染器本身會淨化 HTML 時） |
-| `stripInvisible`    | `boolean`                         | `true`              | 一併清除隱形字元                                                                                                                                                                          |
-| `imagePlaceholder`  | `string`                          | `'[image removed]'` | 被移除圖片的替代文字                                                                                                                                                                      |
+| 選項                | 型別                              | 預設值                                                  | 說明                                                                                                                                                                                      |
+| :------------------ | :-------------------------------- | :------------------------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allowedImageHosts` | `string[]`                        | `[]`                                                    | 允許的圖片網域，支援 `*.example.com`；相對路徑一律允許，`data:` 一律移除                                                                                                                  |
+| `allowedLinkHosts`  | `string[] \| '*'`                 | `'*'`                                                   | 允許的連結網域；`'*'` 時仍會移除 `javascript:`、`vbscript:`、`data:`、`file:`                                                                                                             |
+| `html`              | `'escape' \| 'filter' \| 'allow'` | `'escape'`                                              | `escape`：HTML 顯示為文字（保留 `<https://…>` 自動連結）；`filter`：保留安全標籤，移除危險標籤與網址不在白名單的標籤，無法解析的一律跳脫；`allow`：不處理（僅限渲染器本身會淨化 HTML 時） |
+| `stripInvisible`    | `boolean`                         | `true`                                                  | 一併清除隱形字元                                                                                                                                                                          |
+| `imagePlaceholder`  | `string`                          | `'[image removed]'`                                     | 被移除圖片的替代文字                                                                                                                                                                      |
+| `bareUrls`          | `'defang' \| 'keep'`              | `allowedLinkHosts` 為白名單時 `'defang'`，否則 `'keep'` | 文字中的裸網址：`defang` 讓不在白名單的裸網址無法被自動連結並列入 `removedUrls`；`keep` 不處理                                                                                            |
 
 **SanitizeOutputResult**：`{ text, removedUrls, invisibleRemoved, htmlEscaped }`
 
@@ -272,7 +275,7 @@ sanitizeModelOutput('Press <kbd>Ctrl</kbd> <img srcset="https://evil.example/x 1
 // 'Press <kbd>Ctrl</kbd> '
 ```
 
-> 這是縱深防禦的一層。渲染時仍建議使用會淨化 HTML 的 Markdown 渲染器（例如 markdown-it 的 `html: false`，或搭配 DOMPurify）。
+> 這是縱深防禦的一層。渲染時仍建議使用會淨化 HTML 的 Markdown 渲染器（例如 markdown-it 的 `html: false`，或搭配 DOMPurify）。再搭配 CSP 的 `img-src`／`connect-src` 限制可連線的來源，即使過濾器失手，瀏覽器也不會把資料送出去。
 
 ---
 

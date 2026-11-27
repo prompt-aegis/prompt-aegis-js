@@ -4,6 +4,15 @@
 
 ## [未發佈]
 
+### 安全性
+
+- **core**：`sanitizeModelOutput` 可被反斜線混淆主機繞過，造成**零點擊資料外洩**（影響 0.2.0 以前所有版本）。過濾器以 URL 標準解析 `https://允許網域\@evil.example`，把 `\` 當成路徑分隔、判定主機在白名單內；但 CommonMark 渲染器把 `\@` 當成跳脫的 `@`，輸出 `https://允許網域@evil.example`，真正的主機是攻擊者的。圖片、參考式圖片、連結與自動連結皆受影響，markdown-it 與 marked 都會載入。現在改以「渲染後的網址」判斷網域（先還原反斜線跳脫與字元實體），遠端網址含 `\` 或無法安全解碼的實體一律移除。
+- **core**：文字中的裸網址（`https://…`、`www.…`）會被 marked 預設的 GFM 自動連結、markdown-it 的 `linkify` 變成連結，繞過 `allowedLinkHosts`。新增 `bareUrls` 選項，`allowedLinkHosts` 為白名單時預設把不在白名單的裸網址改寫成無法自動連結的形式。
+
+### 修正
+
+- **core**：只被圖片使用的參考式定義，原本必須同時通過圖片與連結白名單；圖片網域不在連結白名單時，合法圖片會被誤刪。現在圖片參考只檢查圖片白名單。
+
 ## [0.2.0] — 2026-11-27
 
 `@prompt-aegis/core`、`@prompt-aegis/node`、`@prompt-aegis/dom` 0.2.0。`@prompt-aegis/tarpit` 未變更，維持 0.1.0。
