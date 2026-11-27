@@ -6,6 +6,9 @@ import {
   hashString,
   renderTarpitHtml,
   sanitizePrompt,
+  combineScores,
+  detectInjection,
+  scoreToLevel,
   type BotCategory,
   type BotClassification,
   type ClassifyOptions,
@@ -200,6 +203,42 @@ export interface AegisNodeOptions {
         maxStrings?: number;
         /** Max total characters across all screened strings. Default 1 000 000. */
         maxTotalChars?: number;
+        /**
+         * Also score these fields **joined together** (in body order), e.g.
+         * `['messages.*.content']`. An attack split across turns ("ignore all"
+         * / "previous instructions") is harmless per message but not combined.
+         * Reported as the `(conversation)` finding. Default: off.
+         */
+        conversationFields?: string[];
+        /**
+         * Reject bodies containing an object whose `role` is one of these
+         * (case-insensitive), e.g. `['system', 'developer']`. The client should
+         * never author system messages; letting it do so hands it the model's
+         * highest-trust channel. Default: off.
+         */
+        forbidRoles?: string[];
+        /**
+         * Extra model-based detector (e.g. a prompt-injection classifier). Runs
+         * on every screened string — and the joined conversation — after the
+         * rules; its 0…1 score is combined with the rule score. Rules stay the
+         * cheap first layer; this is where real recall comes from.
+         */
+        detector?: (
+          text: string,
+          context: { path: string; request: AegisRequest },
+        ) =>
+          | number
+          | { score: number; label?: string }
+          | Promise<number | { score: number; label?: string }>;
+        /**
+         * When the detector throws or times out: `'open'` (default) falls back
+         * to the rule score and emits an `error` event; `'closed'` blocks.
+         */
+        detectorFailure?: 'open' | 'closed';
+        /** Detector timeout per call, ms. Default 5000. */
+        detectorTimeoutMs?: number;
+        /** Max detector calls in flight per request. Default 8. */
+        detectorConcurrency?: number;
       });
   /** Serve `GET /robots.txt` with AI opt-out rules. Default off. */
   robotsTxt?: boolean | RobotsTxtOptions;
@@ -513,12 +552,16 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
     return renderTarpitHtml(payload, { siteName: tarpitCfg.siteName });
   }
 
-  function sanitizeBody(
+  async function sanitizeBody(
+    req: AegisRequest,
     body: unknown,
     opts: Exclude<AegisNodeOptions['sanitize'], false | undefined>,
   ) {
     const findings: FieldFinding[] = [];
     const scores: number[] = [];
+    const screened: { path: string; text: string; ruleScore: number }[] = [];
+    const forbidden = new Set((opts.forbidRoles ?? []).map((r) => r.toLowerCase()));
+    const threshold = opts.blockThreshold ?? 0.85;
     let blocked = false;
     let changed = false;
     measureBody(body, {
@@ -540,6 +583,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
             actions: r.actions,
           });
         }
+        screened.push({ path, text: value, ruleScore: r.score });
         scores.push(r.score);
         if (r.blocked) blocked = true;
         if (r.changed) changed = true;
@@ -548,6 +592,18 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       if (Array.isArray(value))
         return value.map((v, i) => visit(v, path ? `${path}.${i}` : String(i), depth + 1));
       if (isPlainObject(value)) {
+        const role = value.role;
+        if (forbidden.size && typeof role === 'string' && forbidden.has(role.toLowerCase())) {
+          blocked = true;
+          findings.push({
+            path: path ? `${path}.role` : 'role',
+            level: 'high',
+            score: 1,
+            rules: ['role.forbidden'],
+            actions: ['blocked'],
+          });
+          scores.push(1);
+        }
         const out: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(value))
           out[k] = visit(v, path ? `${path}.${k}` : k, depth + 1);
@@ -556,6 +612,71 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       return value;
     };
     const next = visit(body, '', 0);
+
+    // Cross-turn: score the selected fields joined, so a split attack counts.
+    const convo = opts.conversationFields;
+    let conversation: { text: string; ruleScore: number } | null = null;
+    if (convo?.length) {
+      const parts = screened.filter((x) => convo.some((f) => matchPath(f, x.path)));
+      if (parts.length > 1) {
+        const text = parts.map((x) => x.text).join(' ');
+        const d = detectInjection(text, opts);
+        conversation = { text, ruleScore: d.score };
+        const best = Math.max(...parts.map((x) => x.ruleScore));
+        if (d.score > best && d.level !== 'none') {
+          findings.push({
+            path: '(conversation)',
+            level: d.level,
+            score: d.score,
+            rules: d.matches.map((m) => m.ruleId),
+            actions: [],
+          });
+          scores.push(d.score);
+          if (d.score >= threshold) blocked = true;
+        }
+      }
+    }
+
+    // Model-based detector: combined with the rule score per item.
+    if (opts.detector && !blocked) {
+      const items = [
+        ...screened.map((x) => ({ path: x.path, text: x.text, ruleScore: x.ruleScore })),
+        ...(conversation ? [{ path: '(conversation)', ...conversation }] : []),
+      ];
+      const concurrency = Math.max(1, opts.detectorConcurrency ?? 8);
+      for (let i = 0; i < items.length && !blocked; i += concurrency) {
+        const batch = items.slice(i, i + concurrency);
+        const results = await Promise.all(batch.map((item) => runDetector(req, opts, item)));
+        results.forEach((det, j) => {
+          const item = batch[j]!;
+          if (det === 'error') {
+            if ((opts.detectorFailure ?? 'open') === 'closed') {
+              blocked = true;
+              findings.push({
+                path: item.path,
+                level: 'high',
+                score: 1,
+                rules: ['detector.error'],
+                actions: ['blocked'],
+              });
+            }
+            return;
+          }
+          if (det.score <= 0) return;
+          const score = combineScores([item.ruleScore, det.score]);
+          findings.push({
+            path: item.path,
+            level: scoreToLevel(score),
+            score,
+            rules: [det.label ? `detector:${det.label}` : 'detector'],
+            actions: score >= threshold ? ['blocked'] : [],
+          });
+          scores.push(score);
+          if (score >= threshold) blocked = true;
+        });
+      }
+    }
+
     return {
       body: next,
       changed,
@@ -563,6 +684,35 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       findings,
       score: scores.reduce((a, b) => Math.max(a, b), 0),
     };
+  }
+
+  async function runDetector(
+    req: AegisRequest,
+    opts: Exclude<AegisNodeOptions['sanitize'], false | undefined>,
+    item: { path: string; text: string },
+  ): Promise<{ score: number; label?: string } | 'error'> {
+    const timeoutMs = opts.detectorTimeoutMs ?? 5000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const raw = await Promise.race([
+        Promise.resolve(opts.detector!(item.text, { path: item.path, request: req })),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`detector timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
+      const r = typeof raw === 'number' ? { score: raw } : raw;
+      const score = Number(r?.score);
+      if (!Number.isFinite(score)) throw new Error('detector returned a non-numeric score');
+      return { score: Math.min(Math.max(score, 0), 1), ...(r.label ? { label: r.label } : {}) };
+    } catch (err) {
+      emit('error', req, { hook: 'detector', path: item.path, message: errorMessage(err) });
+      return 'error';
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async function inspect(req: AegisRequest): Promise<AegisDecision> {
@@ -706,9 +856,9 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       req.body !== null &&
       (!s.paths || pathMatches(s.paths, req.path))
     ) {
-      let r: ReturnType<typeof sanitizeBody>;
+      let r: Awaited<ReturnType<typeof sanitizeBody>>;
       try {
-        r = sanitizeBody(req.body, s);
+        r = await sanitizeBody(req, req.body, s);
       } catch (err) {
         if (!(err instanceof BodyLimitError)) throw err;
         const reason = err.code === 'body_too_deep' ? 'body-too-deep' : 'body-too-large';

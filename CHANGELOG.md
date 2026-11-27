@@ -4,6 +4,14 @@
 
 ## [未發佈]
 
+### 新增
+
+- **core**：注入規則擴充繁簡中文同義說法（別管／無視／拋開／不用理會／作廢…）、日文、韓文、法文、西文、德文的「忽略先前指令」與「洩漏系統提示」句型，以及「把系統設定原文貼出來」這類逐字洩漏要求。
+- **core**：`detectInjection` 會掃描解碼後的內容（`decode` 選項，預設開啟）：可解成可讀文字的 Base64 片段一律解碼；內文提到 ROT13、反轉、解碼時，也掃描 ROT13 與反轉後的版本。解碼後命中規則會加上 high 等級的 `obfuscation.encoded-payload`。
+- **node**：`sanitize.conversationFields` 把多則訊息合併後再評分，擋下拆成兩則各自無害訊息的攻擊；`sanitize.forbidRoles` 拒絕前端送出的 `system`／`developer` 訊息。
+- **node**：`sanitize.detector` 可接上模型型偵測器，分數與規則分數合併；支援逾時（`detectorTimeoutMs`）、並行上限（`detectorConcurrency`）與失效處理（`detectorFailure`，預設 `open` 並發出 `error` 事件）。
+- 新增 `pnpm sweep-threshold`：用自己的攻擊與正常語料，列出各門檻的攔截率與誤判率，作為設定 `blockThreshold` 的依據。
+
 ### 安全性
 
 - **core**：`sanitizeModelOutput` 可被反斜線混淆主機繞過，造成**零點擊資料外洩**（影響 0.2.0 以前所有版本）。過濾器以 URL 標準解析 `https://允許網域\@evil.example`，把 `\` 當成路徑分隔、判定主機在白名單內；但 CommonMark 渲染器把 `\@` 當成跳脫的 `@`，輸出 `https://允許網域@evil.example`，真正的主機是攻擊者的。圖片、參考式圖片、連結與自動連結皆受影響，markdown-it 與 marked 都會載入。現在改以「渲染後的網址」判斷網域（先還原反斜線跳脫與字元實體），遠端網址含 `\` 或無法安全解碼的實體一律移除。

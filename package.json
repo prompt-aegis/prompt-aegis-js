@@ -21,7 +21,8 @@
     "attack": "pnpm build && pnpm --filter @prompt-aegis/demo-site attack",
     "attack:unprotected": "pnpm build && pnpm --filter @prompt-aegis/demo-site attack:unprotected",
     "trap-demo": "pnpm build && node examples/agent-trap/demo.mjs",
-    "test:adversarial": "vitest run packages/node/test/adversarial.test.ts packages/dom/test/adversarial.test.ts --reporter=verbose"
+    "test:adversarial": "vitest run packages/node/test/adversarial.test.ts packages/dom/test/adversarial.test.ts --reporter=verbose",
+    "sweep-threshold": "pnpm --filter ./packages/core build && node scripts/sweep-threshold.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

@@ -38,6 +38,13 @@ export interface DetectOptions {
    * otherwise padding the input would hide an attack past the limit.
    */
   maxScanLength?: number;
+  /**
+   * Also scan decoded views of the text: Base64 segments that decode to
+   * readable text, and — when the text mentions ROT13 / reversing / decoding —
+   * its ROT13 and reversed forms. Catches "decode this, then follow it".
+   * Default `true`.
+   */
+  decode?: boolean;
 }
 
 export interface DetectionResult {
@@ -60,6 +67,76 @@ export function prepareForMatching(text: string, maxLength = DEFAULT_MAX_SCAN_LE
   const stripped = stripInvisible(slice, { collectFindings: false, preserveEmojiZwj: true });
   const normalized = normalizeForMatching(stripped.text).replace(/[ \t\f\v\u00a0\u3000]+/g, ' ');
   return { stripped, normalized };
+}
+
+// ─── Decoded views ─────────────────────────────────────────────────────────
+// "Decode this, then do what it says" carries no keywords in the visible
+// text. We decode cheap, common encodings and run the same rules over the
+// result. Bounded so it stays linear in the input.
+
+/** Text hints that an encoding other than Base64 is in play. */
+const DECODE_HINT =
+  /\b(?:rot-?13|caesar|reverse[ds]?|backwards?|decode|decrypt|unscramble)\b|解碼|解码|解密|反轉|反转|倒過來|倒过来|倒著|倒着|倒序|逆序|反過來|反过来|還原|还原/i;
+const B64_CANDIDATE = /[A-Za-z0-9+/_-]{16,}={0,2}/g;
+const MAX_DECODED_CHARS = 200_000;
+
+function decodeBase64Text(blob: string): string | null {
+  const atobFn = (globalThis as { atob?: (s: string) => string }).atob;
+  if (!atobFn) return null;
+  let b64 = blob.replace(/=+$/, '').replace(/-/g, '+').replace(/_/g, '/');
+  if (b64.length % 4 === 1) return null;
+  b64 += '='.repeat((4 - (b64.length % 4)) % 4);
+  let binary: string;
+  try {
+    binary = atobFn(b64);
+  } catch {
+    return null;
+  }
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return null; // not UTF-8 text (an image, a hash, …)
+  }
+  // Mostly printable, and containing a word, or it is just noise.
+  let printable = 0;
+  for (const ch of text) if (ch >= ' ' || ch === '\n' || ch === '\t') printable++;
+  if (printable < text.length * 0.9 || !/[\p{L}]{2}/u.test(text)) return null;
+  return text;
+}
+
+const rot13 = (s: string) =>
+  s.replace(/[a-z]/gi, (c) => {
+    const base = c <= 'Z' ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+  });
+
+/** Extra haystacks: decoded Base64 always; ROT13 / reversed only on a hint. */
+function decodedViews(normalized: string): { text: string; source: string }[] {
+  const views: { text: string; source: string }[] = [];
+  // Every candidate is tried (no count cap: padding with junk tokens must not
+  // push the payload out of reach). Total work stays linear: candidates do not
+  // overlap, and decoded text is bounded by MAX_DECODED_CHARS.
+  const decodedParts: string[] = [];
+  let budget = MAX_DECODED_CHARS;
+  B64_CANDIDATE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while (budget > 0 && (m = B64_CANDIDATE.exec(normalized)) !== null) {
+    const decoded = decodeBase64Text(m[0]);
+    if (decoded) {
+      decodedParts.push(decoded.slice(0, budget));
+      budget -= decoded.length;
+    }
+  }
+  if (decodedParts.length > 0)
+    views.push({ text: normalizeForMatching(decodedParts.join('\n')), source: 'base64' });
+  if (DECODE_HINT.test(normalized)) {
+    const slice = normalized.slice(0, MAX_DECODED_CHARS);
+    views.push({ text: rot13(slice), source: 'rot13' });
+    views.push({ text: Array.from(slice).reverse().join(''), source: 'reversed' });
+  }
+  return views;
 }
 
 /** Combine independent rule weights: 1 − Π(1 − wᵢ). */
@@ -125,9 +202,11 @@ export function detectInjection(text: string, options: DetectOptions = {}): Dete
     if (stripped.decodedTagPayload) smuggledPayload = stripped.decodedTagPayload;
   }
 
-  const haystacks = smuggledPayload
-    ? [normalized, normalizeForMatching(smuggledPayload)]
-    : [normalized];
+  const haystacks: { text: string; source: string }[] = [{ text: normalized, source: '' }];
+  if (smuggledPayload)
+    haystacks.push({ text: normalizeForMatching(smuggledPayload), source: 'tag-characters' });
+  if (options.decode ?? true) haystacks.push(...decodedViews(normalized));
+  const decodedSources = new Set<string>();
 
   for (const rule of rules) {
     const flags = rule.pattern.flags.replace(/[gy]/g, '') + 'g';
@@ -136,23 +215,38 @@ export function detectInjection(text: string, options: DetectOptions = {}): Dete
     for (const hay of haystacks) {
       re.lastIndex = 0;
       let m: RegExpExecArray | null;
-      while (count < maxPerRule && (m = re.exec(hay)) !== null) {
+      while (count < maxPerRule && (m = re.exec(hay.text)) !== null) {
         if (m[0].length === 0) {
           re.lastIndex++;
           continue;
         }
+        const decoded = hay.source !== '' && hay.source !== 'tag-characters';
+        if (decoded && rule.category !== 'obfuscation') decodedSources.add(hay.source);
         matches.push({
           ruleId: rule.id,
           category: rule.category,
           severity: rule.severity,
-          description: rule.description,
+          description: decoded ? `(decoded ${hay.source}) ${rule.description}` : rule.description,
           match: m[0].trim().slice(0, 200),
-          index: hay === normalized ? m.index : -1,
+          index: hay.source === '' ? m.index : -1,
         });
         count++;
       }
     }
     if (count > 0) weights.push(SEVERITY_WEIGHT[rule.severity]);
+  }
+
+  // An instruction hidden behind an encoding is itself a strong signal.
+  if (decodedSources.size > 0) {
+    matches.push({
+      ruleId: 'obfuscation.encoded-payload',
+      category: 'obfuscation',
+      severity: 'high',
+      description: `Injection found after decoding (${[...decodedSources].join(', ')}).`,
+      match: '',
+      index: -1,
+    });
+    weights.push(SEVERITY_WEIGHT.high);
   }
 
   const score = combineScores(weights);
