@@ -25,16 +25,16 @@ describe('engine', () => {
 
   it('tarpits AI training crawlers by default and allows assistants', async () => {
     const onEvent = vi.fn();
-    const e = createAegisEngine({ ...fast, onEvent });
+    const e = createAegisEngine({ onEvent, tarpit: { delayMs: 0, leafRate: 0 } });
     const d = await e.inspect({
       method: 'GET',
       path: '/blog/post',
       headers: { 'user-agent': GPTBOT },
     });
     expect(d.action).toBe('tarpit');
-    expect(d.response!.body).toContain('aegis-');
-    expect(d.response!.body).toContain('/__aegis/trap/');
-    expect(d.response!.headers['x-robots-tag']).toContain('noindex');
+    expect(d.response!.body).toContain('doc-');
+    expect(d.response!.body).toContain('/documents/archive/');
+    expect(d.response!.body).toContain('noindex'); // enforced in-page, not via a stand-out header
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'tarpit' }));
     const a = await e.inspect({
       method: 'GET',
@@ -60,7 +60,7 @@ describe('engine', () => {
     const e = createAegisEngine({ ...fast, store });
     const t = await e.inspect({
       method: 'GET',
-      path: '/__aegis/trap/ledger-abc',
+      path: '/documents/archive',
       headers: { 'user-agent': BROWSER },
       ip: '1.2.3.4',
     });
@@ -155,7 +155,8 @@ describe('engine', () => {
     });
     expect(d.action).toBe('respond');
     expect(d.response!.body).toContain('User-agent: GPTBot');
-    expect(d.response!.body).toContain('Disallow: /__aegis/trap/');
+    // No trailing slash: the rule must also cover the exact entry the DOM honeypot links to.
+    expect(d.response!.body).toMatch(/^Disallow: \/documents\/archive$/m);
   });
 });
 
@@ -214,7 +215,7 @@ describe('adapters', () => {
     await mw(
       {
         method: 'GET',
-        url: '/__aegis/trap',
+        url: '/documents/archive',
         headers: { 'user-agent': BROWSER, 'x-forwarded-for': '9.9.9.9, 203.0.113.50' },
         ip: '10.0.0.1',
       } as never,
@@ -294,7 +295,7 @@ describe('adapters', () => {
       new Request('https://site.test/a', { headers: { 'user-agent': GPTBOT } }),
     );
     expect(bot.response?.status).toBe(200);
-    expect(await bot.response!.text()).toContain('aegis-');
+    expect(await bot.response!.text()).toContain('doc-');
 
     const req = new Request('https://site.test/api', {
       method: 'POST',

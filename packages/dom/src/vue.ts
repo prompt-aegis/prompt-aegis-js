@@ -30,7 +30,7 @@ export const vAegisGuard: Directive<Guarded, GuardInputOptions | undefined> = {
   },
 };
 
-/** `<AegisHoneypot seed="/pricing" trap-path="/__aegis/trap" @trap="..." />` */
+/** `<AegisHoneypot seed="/pricing" trap-path="/documents/archive" @trap="..." />` */
 export const AegisHoneypot = defineComponent({
   name: 'AegisHoneypot',
   props: {
@@ -78,6 +78,7 @@ export const AegisHoneypot = defineComponent({
         },
         [
           payload.notice ? h('p', payload.notice) : null,
+          h('p', payload.meta),
           ...payload.paragraphs.map((p) => h('p', p)),
           ...payload.links.map((l) =>
             h('a', { href: l.href, rel: 'nofollow noopener', tabindex: -1 }, l.text),

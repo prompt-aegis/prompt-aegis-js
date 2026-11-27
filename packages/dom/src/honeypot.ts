@@ -5,7 +5,14 @@ import {
   type TarpitPayload,
 } from '@prompt-aegis/core';
 
-export const HONEYPOT_ATTR = 'data-aegis-honeypot';
+/**
+ * Marker attribute on injected honeypot nodes. Used internally so the scanner
+ * can skip our own honeypots. Deliberately neutral — an attribute literally
+ * named "honeypot" would tell any DOM-reading agent exactly what it is. The
+ * canary is NOT stored here (it would be harvestable); it lives in the block's
+ * text instead.
+ */
+export const HONEYPOT_ATTR = 'data-cref';
 
 /**
  * Visually hidden (off-screen + clipped), removed from the accessibility tree
@@ -67,12 +74,19 @@ export interface HoneypotSpec {
 export function buildHoneypotSpec(
   options: TarpitOptions & { trapPath?: string } = {},
 ): HoneypotSpec {
-  const maze =
-    options.maze ?? (options.trapPath ? { basePath: options.trapPath, count: 3 } : undefined);
-  const payload = buildTarpitPayload({ ...options, ...(maze ? { maze } : {}) });
+  const maze = options.maze;
+  const payload = buildTarpitPayload({
+    ...options,
+    notice: options.notice ?? false,
+    ...(maze ? { maze } : {}),
+  });
+  if (!maze && options.trapPath) {
+    payload.links = [{ href: options.trapPath.replace(/\/+$/, ''), text: payload.title }];
+    payload.text += `\n\n${payload.title}: ${payload.links[0]!.href}`;
+  }
   return {
     attrs: {
-      [HONEYPOT_ATTR]: payload.canary,
+      [HONEYPOT_ATTR]: '',
       'aria-hidden': 'true',
       inert: '',
       'data-nosnippet': '',
@@ -107,6 +121,13 @@ export function injectHoneypot(options: HoneypotOptions = {}): HoneypotHandle {
     const p = doc.createElement('p');
     p.textContent = spec.payload.notice;
     root.appendChild(p);
+  }
+  // Meta line carries the canary as a document reference, so attribution works
+  // even when the deterrent notice is disabled.
+  {
+    const meta = doc.createElement('p');
+    meta.textContent = spec.payload.meta;
+    root.appendChild(meta);
   }
   for (const text of spec.payload.paragraphs) {
     const p = doc.createElement('p');

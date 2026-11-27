@@ -337,7 +337,7 @@ function onTrap(e: HoneypotTrapEvent) {
 
 <template>
   <ChatBox />
-  <AegisHoneypot :seed="seed" trap-path="/__aegis/trap" @trap="onTrap" />
+  <AegisHoneypot :seed="seed" trap-path="/documents/archive" @trap="onTrap" />
 </template>
 ```
 
@@ -413,7 +413,7 @@ export default function App() {
       {/* SSR（Next.js 等）時 seed 請用固定值，例如路由路徑 */}
       <AegisHoneypot
         seed={location.pathname}
-        trapPath="/__aegis/trap"
+        trapPath="/documents/archive"
         onTrap={(e) => navigator.sendBeacon('/api/bot-report', JSON.stringify(e))}
       />
     </>
@@ -511,7 +511,7 @@ export function ChatBox() {
       });
 
       // 2. 隱形蜜罐
-      injectHoneypot({ seed: location.pathname, trapPath: '/__aegis/trap' });
+      injectHoneypot({ seed: location.pathname, trapPath: '/documents/archive' });
 
       // 3. 送出並顯示過濾後的回覆
       document.querySelector('#send').addEventListener('click', async () => {
@@ -615,7 +615,7 @@ pnpm attack:unprotected   # 對照組：關掉防護再攻擊一次
 網頁內容   ──▶  │ Spotlight 標記為資料              │           └────────────────────────────────┘
                 └──────────────────────────────────┘
 
-AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑 ──▶ 標記用戶端（IP + UA）──▶ Tarpit 誘捕頁 + Canary 迷宮
+AI 爬蟲 ──▶ robots.txt 拒絕 ──▶（不遵守）進入陷阱路徑 ──▶ 標記用戶端（預設 IP）──▶ Tarpit 誘捕頁 + Canary 迷宮
 
 AI 攻擊代理 ──▶ 誘餌 FTP 服務 ──▶ 無限假檔案系統 ──▶ 代理一直 ls／cd ──▶ 耗盡其回合與 API 成本（被動 agent-tarpit）
 ```
@@ -664,6 +664,17 @@ pnpm install
 | `pnpm trap-demo`    | 示範 agent-tarpit 困住一個自動化代理                                                             |
 | `pnpm release:dry`  | 建置並模擬發佈（檢查打包內容）                                                                   |
 | `pnpm release`      | 建置、測試後以 `pnpm publish` 發佈所有套件（`workspace:*` 會自動換成實際版本）                   |
+
+### 誘餌對抗測試
+
+執行 `pnpm test:adversarial` 可重現 18 個案例。Node 測試使用 `127.0.0.1` 的暫時 HTTP server 與真實 HTTP 請求，DOM 測試使用 jsdom；不會連到外部網站。延遲設為零，這組測試不評估耗時效果，也沒有呼叫真實 LLM agent。
+
+- `RESISTED`：指定探測沒有成功，例如舊標記比對、公開 seed 重建、生成連結的副檔名／MIME 不一致。
+- `LIMIT`：保留的邊界測試，包含未設定身分驗證的公開頁面、robots.txt 揭露前綴、隱藏 DOM 可被過濾。通過代表這些限制仍被忠實記錄，不是防禦成功。
+
+案例位於 `packages/node/test/adversarial.test.ts`（16 個）與 `packages/dom/test/adversarial.test.ts`（2 個）。涵蓋 UA 輪替、固定文件 canary、未知子路徑 404、簽章竄改／跨部署移植、跨 worker 一致性、設定 session 驗證後的 UA 偽裝、驗證服務錯誤時拒絕存取，以及自訂站內文件。預設生成器仍有合成內容特徵，句型測試只證明舊探測方式不再命中，不能推論真實網站的誤判率。
+
+`pnpm attack` 的 demo 整合測試需使用空閒的本機埠，會啟動獨立程序並以父子程序 IPC 在各案例間重設 IP 標記；不提供 HTTP 重設端點。
 
 ### 使用開發中的版本
 

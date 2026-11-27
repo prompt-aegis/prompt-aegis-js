@@ -41,6 +41,7 @@ const API = {
     'normalizeForMatching',
     'prepareForMatching',
     'randomHex',
+    'renderSoftNotFound',
     'renderTarpitHtml',
     'resolveRules',
     'sanitizeModelOutput',

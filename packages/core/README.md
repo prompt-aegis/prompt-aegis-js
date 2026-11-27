@@ -363,33 +363,43 @@ const canary = createCanary(); // 'aegis-Kazernis-1a2b3c'
 findCanaries(modelOutput, [canary]); // 出現則回傳 [canary]
 ```
 
+> 預設字首 `aegis` 好 grep，但也容易被會讀內容的 agent 認出（就是本套件名）。要做隱匿型誘餌時，請改用中性或站內字首：`createCanary({ prefix: 'DOC' })`，並記下你用的字首。
+
 ---
 
 ### buildTarpitPayload／renderTarpitHtml
 
 ```ts
 buildTarpitPayload(options?: TarpitOptions): TarpitPayload
-renderTarpitHtml(payload: TarpitPayload, options?: { title?: string }): string
+renderTarpitHtml(payload: TarpitPayload, options?: RenderTarpitOptions): string
+renderSoftNotFound(options?: SoftNotFoundOptions): string
 ```
 
-產生給爬蟲看的誘餌內容：明文聲明 + Canary + 擬真但無意義的段落 +（選用）迷宮連結。相同 `seed` 會產生完全相同的內容，可安全用於 SSR。
+產生給爬蟲看的誘餌內容：擬真的文件標題 + 內部一致的日期 + 擬真但無意義的段落 +（選用）迷宮連結。Canary 會織進內文（當成文件代碼），所以就算關掉 `notice` 也能歸因。相同 `seed` 會產生完全相同的內容，可用於 SSR；公開 seed 也允許外部重建，因此伺服器誘餌應使用 Node engine 的秘密衍生機制。自動產生的 payload canary 字首為 `doc`，直接呼叫 `createCanary()` 仍預設 `aegis`。
 
 **TarpitOptions**
 
-| 選項         | 型別                                   | 預設值                 | 說明                                          |
-| :----------- | :------------------------------------- | :--------------------- | :-------------------------------------------- |
-| `seed`       | `string \| number`                     | 隨機                   | 決定性種子（建議使用頁面路徑）                |
-| `paragraphs` | `number`                               | `3`                    | 誘餌段落數                                    |
-| `sentences`  | `[number, number]`                     | `[3, 6]`               | 每段句數範圍                                  |
-| `canary`     | `string`                               | 依 seed 產生           | 指定 Canary                                   |
-| `notice`     | `string \| false`                      | `DEFAULT_AGENT_NOTICE` | 聲明文字，`{canary}` 會被替換；`false` 不輸出 |
-| `maze`       | `{ basePath: string; count?: number }` | —                      | 產生迷宮連結，`count` 預設 `5`                |
+| 選項         | 型別                                                      | 預設值                 | 說明                                                                      |
+| :----------- | :-------------------------------------------------------- | :--------------------- | :------------------------------------------------------------------------ |
+| `seed`       | `string \| number`                                        | 隨機                   | 決定性種子（建議使用頁面路徑）                                            |
+| `paragraphs` | `number`                                                  | `3`                    | 誘餌段落數                                                                |
+| `sentences`  | `[number, number]`                                        | `[3, 6]`               | 每段句數範圍                                                              |
+| `canary`     | `string`                                                  | 依 seed 產生           | 指定 Canary                                                               |
+| `content`    | `Partial<TarpitContent>`                                  | 內建英文語料           | 覆寫語料池（units/actions/artifacts/outcomes/titleKinds/…），對齊母站語言 |
+| `notice`     | `string \| false`                                         | `DEFAULT_AGENT_NOTICE` | 聲明文字，`{canary}` 會被替換；`false` 不輸出（canary 仍在內文）          |
+| `maze`       | `{ basePath: string; count?: number; leafRate?: number }` | —                      | 產生迷宮連結，`count` 預設 `5`；`leafRate`（0–1）讓部分頁成為無連結的死路 |
 
-**TarpitPayload**：`{ canary, notice, paragraphs, links, text }`
+**TarpitPayload**：`{ canary, notice, title, meta, paragraphs, links, text }`
+
+`renderTarpitHtml` 的 `options`：`{ title?, siteName?, wrap? }`。`siteName` 設定頁首／頁尾站名；`wrap(articleHtml, payload) => string` 可把內文套進你的真實版型。`renderSoftNotFound({ title?, canary?, homeHref?, siteName? })` 產生一個像樣的「找不到文件」死路頁（仍埋 canary、仍 noindex），適合想用死路、而非迷宮的部署。
 
 ```ts
-const payload = buildTarpitPayload({ seed: '/pricing', maze: { basePath: '/__aegis/trap' } });
-const html = renderTarpitHtml(payload); // 含 noindex 的完整 HTML 文件
+const payload = buildTarpitPayload({
+  seed: '/pricing',
+  canary: createCanary({ prefix: 'DOC' }), // 隱匿：中性字首
+  maze: { basePath: '/documents/archive', leafRate: 0.3 },
+});
+const html = renderTarpitHtml(payload, { siteName: 'Acme Intranet' });
 ```
 
 ---

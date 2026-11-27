@@ -9,6 +9,7 @@ import {
   detectInjection,
   findCanaries,
   hasInvisible,
+  renderSoftNotFound,
   renderTarpitHtml,
   sanitizeModelOutput,
   sanitizePrompt,
@@ -212,6 +213,99 @@ describe('tarpit', () => {
     const html = renderTarpitHtml(buildTarpitPayload({ seed: 1, notice: '<b>x</b> {canary}' }));
     expect(html).toContain('&lt;b&gt;');
     expect(html).toContain('noindex');
+  });
+});
+
+describe('tarpit realism (hardening)', () => {
+  it('keeps the canary in the body even with the deterrent notice off', () => {
+    const p = buildTarpitPayload({ seed: 'stealth', notice: false });
+    expect(p.notice).toBeNull();
+    // No "this is decoy" white flag anywhere in the rendered page…
+    const html = renderTarpitHtml(p);
+    expect(html.toLowerCase()).not.toContain('synthetic decoy');
+    expect(html.toLowerCase()).not.toContain('automated agents');
+    // …but the canary still rides along for leak attribution.
+    expect(p.text).toContain(p.canary);
+    expect(html).toContain(p.canary);
+  });
+
+  it('renders like a real document index, not a bare notice block', () => {
+    const p = buildTarpitPayload({ seed: 'doc', maze: { basePath: '/d', count: 4 } });
+    const html = renderTarpitHtml(p);
+    expect(html).toContain('<!doctype html>');
+    expect(html).toContain(`<h1>${p.title}</h1>`); // a plausible title, no "Record <hash>"
+    expect(html).toContain('Related documents');
+  });
+
+  it('de-homogenises maze links so one probe cannot classify them all', () => {
+    const { links } = buildTarpitPayload({ seed: 'maze', maze: { basePath: '/trap', count: 12 } });
+    // All stay under the base path…
+    expect(links.every((l) => l.href.startsWith('/trap/'))).toBe(true);
+    // …but the href shapes vary (not every link is the same `/trap/word-id` form).
+    const shapes = new Set(
+      links.map((l) => l.href.replace(/[a-z0-9]+/gi, 'x').replace(/[0-9]{4}/g, 'Y')),
+    );
+    expect(shapes.size).toBeGreaterThan(1);
+    // Every target is an HTML page, so never advertise a binary document.
+    expect(links.every((l) => !/\.(pdf|xlsx|docx|csv)$/.test(l.href))).toBe(true);
+  });
+
+  it('renderSoftNotFound is a believable dead end that still embeds a canary', () => {
+    const c = createCanary({ seed: 'snf' });
+    const html = renderSoftNotFound({ canary: c, homeHref: '/' });
+    expect(html).toContain('noindex');
+    expect(html).toContain(c); // attributable if scraped
+    expect(html.toLowerCase()).not.toContain('decoy');
+    expect(html).toContain('no longer available');
+  });
+
+  it('keeps every body date on or before the document last-updated date', () => {
+    for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
+      const p = buildTarpitPayload({ seed, paragraphs: 3, sentences: [4, 6] });
+      const updated = p.meta.match(/updated (\d{4}-\d{2}-\d{2})/)![1]!;
+      const bodyDates = p.paragraphs.join(' ').match(/\d{4}-\d{2}-\d{2}/g) ?? [];
+      expect(bodyDates.length).toBeGreaterThan(0);
+      for (const d of bodyDates) expect(d <= updated).toBe(true); // no "updated 2021, mentions 2024"
+    }
+  });
+
+  it('maze leafRate creates dead-end pages so the tree is not obviously bottomless', () => {
+    // leafRate 0 → always the full count (back-compat)
+    expect(
+      buildTarpitPayload({ seed: 'x', maze: { basePath: '/m', count: 5, leafRate: 0 } }).links,
+    ).toHaveLength(5);
+    let leaves = 0;
+    const total = 60;
+    for (let i = 0; i < total; i++) {
+      const { links } = buildTarpitPayload({
+        seed: `leaf-${i}`,
+        maze: { basePath: '/m', count: 6, leafRate: 0.5 },
+      });
+      expect(links.length).toBeLessThanOrEqual(6);
+      if (links.length === 0) leaves++;
+    }
+    expect(leaves).toBeGreaterThan(0); // some pages are dead ends
+    expect(leaves).toBeLessThan(total); // but not all
+  });
+
+  it('respects small link limits even when leaf generation is enabled', () => {
+    for (const count of [0, 1, 2]) {
+      for (let i = 0; i < 40; i++) {
+        const { links } = buildTarpitPayload({
+          seed: i,
+          maze: { basePath: '/d', count, leafRate: 0.3 },
+        });
+        expect(links.length).toBeLessThanOrEqual(count);
+      }
+    }
+  });
+
+  it('content override swaps the decoy vocabulary to match the host site', () => {
+    const p = buildTarpitPayload({
+      seed: 's',
+      content: { titleKinds: ['稽核摘要'], titleSubjects: ['門禁'] },
+    });
+    expect(p.title).toBe('稽核摘要 — 門禁');
   });
 });
 

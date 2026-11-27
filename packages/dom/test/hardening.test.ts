@@ -160,7 +160,7 @@ describe('honeypots are not shown to search-engine crawlers (hidden-text / SEO p
     asGooglebot();
     const hp = injectHoneypot({ seed: 'x' });
     expect(document.querySelector(`[${HONEYPOT_ATTR}]`)).toBeNull();
-    expect(hp.canary).toMatch(/^aegis-/);
+    expect(hp.canary).toMatch(/^doc-/);
     expect(() => hp.remove()).not.toThrow();
   });
 

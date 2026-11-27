@@ -16,7 +16,7 @@ import {
 } from '@prompt-aegis/core';
 import { detectAutomation, type AutomationSignals } from './automation';
 import { guardInput, liveGuardOptions, type GuardInputOptions, type GuardTarget } from './guard';
-import { buildHoneypotSpec, type HoneypotTrapEvent } from './honeypot';
+import { buildHoneypotSpec, HONEYPOT_ATTR, type HoneypotTrapEvent } from './honeypot';
 
 /** Attach `guardInput` to a ref'd input / textarea / contenteditable. */
 export function useAegisGuard<T extends GuardTarget>(
@@ -78,7 +78,7 @@ export function AegisHoneypot(props: AegisHoneypotProps): ReactElement | null {
   return createElement(
     'div',
     {
-      'data-aegis-honeypot': payload.canary,
+      [HONEYPOT_ATTR]: '',
       'aria-hidden': true,
       'data-nosnippet': '',
       inert: true,
@@ -95,6 +95,7 @@ export function AegisHoneypot(props: AegisHoneypotProps): ReactElement | null {
       },
     } as Record<string, unknown>,
     payload.notice ? createElement('p', { key: 'n' }, payload.notice) : null,
+    createElement('p', { key: 'm' }, payload.meta),
     ...payload.paragraphs.map((p, i) => createElement('p', { key: `p${i}` }, p)),
     ...payload.links.map((l, i) =>
       createElement(

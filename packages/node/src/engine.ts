@@ -2,6 +2,7 @@ import {
   buildRobotsTxt,
   buildTarpitPayload,
   classifyUserAgent,
+  createCanary,
   hashString,
   renderTarpitHtml,
   sanitizePrompt,
@@ -11,6 +12,8 @@ import {
   type RobotsTxtOptions,
   type SanitizeOptions,
   type SanitizeResult,
+  type TarpitContent,
+  type TarpitPayload,
 } from '@prompt-aegis/core';
 import { MemoryFlagStore, type FlagStore } from './store';
 
@@ -54,12 +57,27 @@ export interface FieldFinding {
 }
 
 export interface AegisEvent {
-  type: 'bot' | 'trap' | 'injection' | 'blocked' | 'tarpit';
+  /** `error`: a user hook (`tarpit.document` / `tarpit.render`) threw; the engine
+   * fell back to its built-in output so the response stays indistinguishable. */
+  type: 'bot' | 'trap' | 'injection' | 'blocked' | 'tarpit' | 'error';
   request: Pick<AegisRequest, 'method' | 'path' | 'ip'>;
   detail: Record<string, unknown>;
 }
 
 export interface AegisNodeOptions {
+  /** Optional server-side access check for private routes, independent of User-Agent.
+   * Verify a session/token with your authentication system; never trust a client
+   * header claiming to be human. False or an exception fails closed with 403.
+   */
+  access?: {
+    /**
+     * Protected route prefixes. Matching is deliberately broad so it is never
+     * narrower than your router: case-insensitive, percent-decoded, with `//`,
+     * `.` and `..` normalised. RegExps are tested against every such variant.
+     */
+    paths: (string | RegExp)[];
+    verify: (req: AegisRequest) => boolean | Promise<boolean>;
+  };
   bots?: ClassifyOptions & {
     /** Action per bot category. Default: training → tarpit, others → allow. */
     policy?: Partial<Record<BotCategory, BotAction>>;
@@ -67,31 +85,89 @@ export interface AegisNodeOptions {
     missingUserAgent?: BotAction;
   };
   /**
-   * Honeypot path prefix. Any hit marks the client as a scraper (for
-   * `flagTtlMs`) and is answered with an endless maze. Add it to robots.txt
+   * Honeypot entry path. The entry and signed child links mark the client
+   * for `flagTtlMs`; unknown descendants return 404 without flagging. Add it to robots.txt
    * `Disallow` so only non-compliant crawlers fall in. `false` disables.
-   * Default `/__aegis/trap`.
+   * Default `/documents/archive`.
    */
   trapPath?: string | false;
   /** How long a trapped client keeps getting tarpitted. Default 1 hour. */
   flagTtlMs?: number;
   /**
-   * Key used to remember a trapped client. Default: IP + User-Agent hash
-   * (`defaultFlagKey`), so other people behind the same NAT are not affected.
+   * Key used to remember a trapped client. Default: IP, unaffected by UA rotation.
+   * Shared NATs share flags; prefer a verified session/account ID when available.
+   * Never use an unverified cookie/header as identity.
    * Return `null` to skip flagging.
    */
   flagKey?: (req: AegisRequest) => string | null;
   /** Storage for flagged clients (swap for Redis in multi-instance setups). */
   store?: FlagStore;
   tarpit?: {
+    /**
+     * Server-only secret used to derive document content and canaries with HMAC.
+     * Set the same high-entropy secret on every instance to keep pages stable
+     * across workers and restarts. Omitted: a random key per engine instance.
+     * Never send this value to the browser.
+     */
+    secret?: string;
     /** Artificial delay before tarpit responses. Default 1500 ms. */
     delayMs?: number;
     /** Maze links per page. Default 6. */
     links?: number;
+    /**
+     * Fraction of tarpit pages (0–1) that are leaves with no onward links, so
+     * a crawler hits believable dead ends instead of an obviously bottomless
+     * tree. Default 0.3.
+     */
+    leafRate?: number;
     /** Paragraphs per page. Default 4. */
     paragraphs?: number;
+    /**
+     * Override decoy word pools so the content matches the host site's
+     * language / domain instead of the default English "internal records".
+     */
+    content?: Partial<TarpitContent>;
+    /** Optional curated document content for this URL, in the site's own language.
+     * Return stable, non-sensitive content. Canary and signed links are preserved.
+     */
+    document?: (
+      req: AegisRequest,
+    ) => { title: string; paragraphs: string[] } | Promise<{ title: string; paragraphs: string[] }>;
+    /** Site name shown in the tarpit page header/footer. Default `Documents`. */
+    siteName?: string;
+    /**
+     * Fully customise the tarpit page HTML (e.g. render inside your real site
+     * template). Receives the payload; return the complete HTML document. When
+     * set, `siteName` is ignored.
+     */
+    render?: (payload: TarpitPayload) => string;
+    /**
+     * Extra / overriding HTTP headers for tarpit responses. By default tarpit
+     * pages send ordinary-looking headers (no `X-Robots-Tag`, no `no-store`) so
+     * they don't stand out — `noindex` is carried in the page `<meta>` instead.
+     * Re-add `{ 'x-robots-tag': 'noindex, nofollow' }` here if you'd rather be
+     * explicit at the header level.
+     */
+    headers?: Record<string, string>;
     /** Status code for tarpit pages. Default 200 (so scrapers keep going). */
     status?: number;
+    /**
+     * Include the deterrent "this is synthetic decoy data" notice on tarpit
+     * pages. It announces the page as a decoy, so a reasoning agent recognises
+     * it instantly — off by default so the page reads like a real document.
+     * The canary is woven into the page body regardless, so leak attribution
+     * still works. Default `false`.
+     */
+    notice?: boolean;
+    /**
+     * Prefix for the canary woven into tarpit pages. Default `doc`.
+     * Set a site-specific prefix to match your document codes. The complete
+     * canary is reported in the `tarpit` event for attribution.
+     */
+    canaryPrefix?: string;
+    /** Stable per document by default. `crawler-day` opts into visible UA/day
+     * differences for attribution, at the cost of easy differential detection. */
+    canaryScope?: 'document' | 'crawler-day';
     /**
      * Max tarpit responses held open at once. Beyond this, tarpit pages are
      * sent without delay so slow responses cannot exhaust your own sockets.
@@ -103,7 +179,9 @@ export interface AegisNodeOptions {
   sanitize?:
     | false
     | (SanitizeOptions & {
-        /** Only screen requests whose path matches. Default: all POST/PUT/PATCH. */
+        /** Only screen requests whose path matches. Default: all POST/PUT/PATCH.
+         * Same broad matching as `access.paths` (case-insensitive, decoded,
+         * normalised), so `/API/chat` cannot skip a `/api` rule. */
         paths?: (string | RegExp)[];
         /**
          * Body fields to screen, as dot paths with `*` wildcards, e.g.
@@ -141,10 +219,10 @@ function header(req: AegisRequest, name: string): string | undefined {
   return Array.isArray(v) ? v[0] : v;
 }
 
-/** Default flag key: client IP + hash of the User-Agent. */
+/** Default flag key: client IP, so a new User-Agent cannot reset the flag. */
 export function defaultFlagKey(req: AegisRequest): string | null {
   if (!req.ip) return null;
-  return `ip:${req.ip}|ua:${hashString(header(req, 'user-agent') ?? '').toString(36)}`;
+  return `ip:${req.ip}`;
 }
 
 /**
@@ -225,12 +303,53 @@ function matchPath(pattern: string, path: string): boolean {
   return p.every((seg, i) => seg === '*' || seg === q[i]);
 }
 
+/** Collapse empty / `.` segments and resolve `..`, keeping a trailing slash. */
+function normalizeSegments(path: string): string {
+  const stack: string[] = [];
+  for (const seg of path.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') stack.pop();
+    else stack.push(seg);
+  }
+  return '/' + stack.join('/') + (stack.length && path.endsWith('/') ? '/' : '');
+}
+
+/**
+ * Every spelling a router might treat as the same route. Frameworks differ —
+ * Express routes case-insensitively and decodes parameters, others decode the
+ * whole path or collapse `//` and `..`. If rule matching is narrower than the
+ * app's router, a request can skip `access` / `sanitize` yet still reach the
+ * handler (e.g. `/PRIVATE/secret`, `/private/%73ecret`, `/API/comments`).
+ * Matching any variant only ever checks *more* paths, so it fails safe.
+ */
+function pathVariants(path: string): string[] {
+  const out = new Set<string>();
+  let current = path;
+  // Decode repeatedly (bounded) so double-encoding cannot hide a segment.
+  for (let i = 0; i < 3; i++) {
+    out.add(current);
+    out.add(normalizeSegments(current));
+    let next: string;
+    try {
+      next = decodeURIComponent(current);
+    } catch {
+      break; // malformed encoding: keep what we have
+    }
+    if (next === current) break;
+    current = next;
+  }
+  for (const v of [...out]) out.add(v.toLowerCase());
+  return [...out];
+}
+
 function pathMatches(rules: (string | RegExp)[], path: string): boolean {
-  return rules.some((r) =>
-    typeof r === 'string'
-      ? path === r || path.startsWith(r.endsWith('/') ? r : r + '/')
-      : r.test(path),
-  );
+  const variants = pathVariants(path);
+  return rules.some((r) => {
+    if (typeof r !== 'string') return variants.some((v) => ((r.lastIndex = 0), r.test(v)));
+    const rule = r.toLowerCase();
+    const prefix = rule.endsWith('/') ? rule : rule + '/';
+    return variants.some((v) => v === rule || v.startsWith(prefix));
+  });
 }
 
 /**
@@ -240,18 +359,56 @@ function pathMatches(rules: (string | RegExp)[], path: string): boolean {
 export function createAegisEngine(options: AegisNodeOptions = {}) {
   const policy = { ...DEFAULT_POLICY, ...options.bots?.policy };
   const trapPath =
-    options.trapPath === false ? null : (options.trapPath ?? '/__aegis/trap').replace(/\/+$/, '');
+    options.trapPath === false
+      ? null
+      : (options.trapPath ?? '/documents/archive').replace(/\/+$/, '');
   const store = options.store ?? new MemoryFlagStore();
   const flagTtl = options.flagTtlMs ?? 60 * 60 * 1000;
   const flagKey = options.flagKey ?? defaultFlagKey;
   const tarpitCfg = {
     delayMs: 1500,
     links: 6,
+    leafRate: 0.3,
     paragraphs: 4,
     status: 200,
+    notice: false,
     maxConcurrent: 64,
     ...options.tarpit,
   };
+  if (tarpitCfg.secret !== undefined && tarpitCfg.secret.length === 0) {
+    throw new Error('tarpit.secret must not be empty');
+  }
+  // Lazy Web Crypto initialization keeps Fetch runtimes usable without Node
+  // built-ins; Node 18 environments without global crypto use its native API.
+  let signer: Promise<{ subtle: SubtleCrypto; key: CryptoKey }> | undefined;
+  async function deriveSeed(parts: string[]): Promise<string> {
+    signer ??= (async () => {
+      const crypto = globalThis.crypto ?? (await import('node:crypto')).webcrypto;
+      const subtle = crypto.subtle as SubtleCrypto;
+      const algorithm: HmacKeyGenParams = { name: 'HMAC', hash: 'SHA-256' };
+      if (tarpitCfg.secret === undefined) warnMissingSecret();
+      const key =
+        tarpitCfg.secret === undefined
+          ? await subtle.generateKey(algorithm, false, ['sign'])
+          : await subtle.importKey(
+              'raw',
+              new TextEncoder().encode(tarpitCfg.secret),
+              algorithm,
+              false,
+              ['sign'],
+            );
+      return { subtle, key };
+    })();
+    const { subtle, key } = await signer;
+    const signature = await subtle.sign(
+      'HMAC',
+      key,
+      new TextEncoder().encode(JSON.stringify(parts)),
+    );
+    return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join(
+      '',
+    );
+  }
   let activeTarpits = 0;
   const robots =
     options.robotsTxt === true
@@ -259,8 +416,12 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       : options.robotsTxt
         ? buildRobotsTxt(options.robotsTxt)
         : null;
+  // No trailing slash: robots.txt rules are prefix matches, so `/documents/archive`
+  // covers both the exact entry (what the DOM honeypot links to) and its signed
+  // children. `/documents/archive/` would leave the entry open, letting compliant
+  // crawlers (search engines, intranet indexers) walk in and get their IP flagged.
   const robotsWithTrap =
-    robots && trapPath ? `${robots}User-agent: *\nDisallow: ${trapPath}/\n` : robots;
+    robots && trapPath ? `${robots}User-agent: *\nDisallow: ${trapPath}\n` : robots;
   const emit = (type: AegisEvent['type'], req: AegisRequest, detail: Record<string, unknown>) =>
     options.onEvent?.({
       type,
@@ -268,33 +429,88 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       detail,
     });
 
-  function tarpitResponse(
+  async function tarpitResponse(
     req: AegisRequest,
     reason: string,
     bot: BotClassification,
-  ): AegisDecision['response'] {
-    // Seed = path + crawler identity + UTC day: stable for one crawler (cache
-    // friendly), different across crawlers and days so a leaked canary tells
-    // you who took it and roughly when.
+  ): Promise<AegisDecision['response']> {
     const who = bot.name ?? `ua${hashString(header(req, 'user-agent') ?? '').toString(36)}`;
     const day = new Date().toISOString().slice(0, 10);
-    const payload = buildTarpitPayload({
-      seed: `${req.path}|${who}|${day}`,
-      paragraphs: tarpitCfg.paragraphs,
-      ...(trapPath ? { maze: { basePath: trapPath, count: tarpitCfg.links } } : {}),
+    // Content and document identity stay stable across UAs and dates by default.
+    const [contentSeed, canarySeed] = await Promise.all([
+      deriveSeed(['content', req.path]),
+      deriveSeed(
+        tarpitCfg.canaryScope === 'crawler-day'
+          ? ['canary', req.path, who, day]
+          : ['canary', req.path],
+      ),
+    ]);
+    const canary = createCanary({
+      prefix: tarpitCfg.canaryPrefix ?? 'doc',
+      seed: canarySeed,
     });
+    const payload = buildTarpitPayload({
+      seed: contentSeed,
+      canary,
+      paragraphs: tarpitCfg.paragraphs,
+      ...(tarpitCfg.content ? { content: tarpitCfg.content } : {}),
+      // Decoy pages should not announce themselves; the canary still rides in
+      // the body. Opt back in with `tarpit.notice` to deter compliant scrapers.
+      ...(tarpitCfg.notice ? {} : { notice: false as const }),
+      ...(trapPath
+        ? { maze: { basePath: trapPath, count: tarpitCfg.links, leafRate: tarpitCfg.leafRate } }
+        : {}),
+    });
+    if (tarpitCfg.document) {
+      // A failing hook must not turn into a 500 that only trapped clients see
+      // (that alone would reveal the trap). Fall back to generated content.
+      try {
+        const document = await tarpitCfg.document(req);
+        payload.title = document.title;
+        payload.paragraphs = [...document.paragraphs];
+      } catch (err) {
+        emit('error', req, { hook: 'document', message: errorMessage(err) });
+      }
+    }
+    payload.links = await Promise.all(
+      payload.links.map(async (link) => ({
+        ...link,
+        href: `${link.href}-${(await deriveSeed(['link', link.href])).slice(0, 24)}`,
+      })),
+    );
+    payload.text = [
+      payload.notice,
+      payload.title,
+      payload.meta,
+      ...payload.paragraphs,
+      ...payload.links.map((link) => `${link.text}: ${link.href}`),
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     emit('tarpit', req, { reason, canary: payload.canary, crawler: who, day });
     return {
       status: tarpitCfg.status,
       headers: {
         'content-type': 'text/html; charset=utf-8',
-        'x-robots-tag': 'noindex, nofollow, noarchive',
-        'cache-control': 'no-store',
+        // Ordinary-looking caching; `noindex` lives in the page <meta> so the
+        // headers don't flag the page as special. Override via `tarpit.headers`.
+        'cache-control': 'private, max-age=0',
+        ...tarpitCfg.headers,
       },
-      body: renderTarpitHtml(payload, {
-        title: `Record ${hashString(req.path).toString(36).toUpperCase()}`,
-      }),
+      // A custom renderer wins; otherwise (or if it throws) render a realistic document page.
+      body: renderBody(req, payload),
     };
+  }
+
+  function renderBody(req: AegisRequest, payload: TarpitPayload): string {
+    if (tarpitCfg.render) {
+      try {
+        return tarpitCfg.render(payload);
+      } catch (err) {
+        emit('error', req, { hook: 'render', message: errorMessage(err) });
+      }
+    }
+    return renderTarpitHtml(payload, { siteName: tarpitCfg.siteName });
   }
 
   function sanitizeBody(
@@ -369,8 +585,54 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
       };
     }
 
+    // A reserved prefix is not evidence that an arbitrary URL is a document.
+    // Only the explicit entry and server-issued child links are traps. Anything
+    // else under the prefix is treated like any other path — it falls through
+    // to the app, which renders its *own* 404. (An engine-made 404 would differ
+    // from the site's real one and let a prober locate the trap prefix.)
+    let isTrap = false;
+    if (trapPath) {
+      if (req.path === trapPath) isTrap = true;
+      else if (req.path.startsWith(trapPath + '/')) {
+        const match = req.path.match(/^(.*)-([0-9a-f]{24})$/);
+        if (match) {
+          const expected = (await deriveSeed(['link', match[1]!])).slice(0, 24);
+          let difference = 0;
+          for (let i = 0; i < expected.length; i++)
+            difference |= expected.charCodeAt(i) ^ match[2]!.charCodeAt(i);
+          isTrap = difference === 0;
+        }
+        if (!isTrap) reasons.push('trap-prefix:unknown');
+      }
+    }
+
+    if (options.access && pathMatches(options.access.paths, req.path)) {
+      let allowed = false;
+      try {
+        allowed = (await options.access.verify(req)) === true;
+      } catch {
+        /* fail closed */
+      }
+      if (!allowed) {
+        emit('blocked', req, { reason: 'access-denied' });
+        return {
+          action: 'block',
+          reasons: ['access-denied'],
+          bot,
+          response: {
+            status: 403,
+            headers: {
+              'content-type': 'text/plain; charset=utf-8',
+              'cache-control': 'private, no-store',
+            },
+            body: 'Access denied.',
+          },
+        };
+      }
+    }
+
     // Trap hit → flag client, serve maze.
-    if (trapPath && (req.path === trapPath || req.path.startsWith(trapPath + '/'))) {
+    if (isTrap) {
       const flaggable = isTrapHitFlaggable(req);
       if (clientKey && flaggable) await store.set(clientKey, flagTtl);
       emit('trap', req, {
@@ -383,7 +645,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
         action: 'tarpit',
         reasons,
         bot,
-        response: tarpitResponse(req, 'trap-path', bot),
+        response: await tarpitResponse(req, 'trap-path', bot),
         delayMs: tarpitCfg.delayMs,
       };
     }
@@ -395,7 +657,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
         action: 'tarpit',
         reasons,
         bot,
-        response: tarpitResponse(req, 'flagged-client', bot),
+        response: await tarpitResponse(req, 'flagged-client', bot),
         delayMs: tarpitCfg.delayMs,
       };
     }
@@ -429,7 +691,7 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
         action: 'tarpit',
         reasons,
         bot,
-        response: tarpitResponse(req, `bot:${bot.name}`, bot),
+        response: await tarpitResponse(req, `bot:${bot.name}`, bot),
         delayMs: tarpitCfg.delayMs,
       };
     }
@@ -498,7 +760,9 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
     if (!decision.delayMs || activeTarpits >= tarpitCfg.maxConcurrent) return;
     activeTarpits++;
     try {
-      await sleep(decision.delayMs);
+      // Jitter the delay (0.5×–1.5×) so tarpit responses don't share one
+      // fixed, fingerprintable latency that marks them out from real pages.
+      await sleep(Math.round(decision.delayMs * (0.5 + Math.random())));
     } finally {
       activeTarpits--;
     }
@@ -519,3 +783,22 @@ export function createAegisEngine(options: AegisNodeOptions = {}) {
 export type AegisEngine = ReturnType<typeof createAegisEngine>;
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Without `tarpit.secret` each engine signs with its own random key: links
+ * issued by one instance 404 on another and every restart invalidates them.
+ * That is silent breakage behind a load balancer, so say it once. Skipped in
+ * test runs to keep output clean.
+ */
+function warnMissingSecret(): void {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env;
+  if (env?.NODE_ENV === 'test') return;
+  console.warn(
+    '[prompt-aegis] tarpit.secret is not set: using a random per-instance key. ' +
+      'Signed tarpit links will 404 on other instances and after restarts. ' +
+      'Set the same high-entropy tarpit.secret on every instance (e.g. from an env var).',
+  );
+}
