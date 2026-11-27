@@ -247,6 +247,9 @@ sanitizeModelOutput(markdown: string, options?: SanitizeOutputOptions): Sanitize
 - **程式碼**：圍欄程式碼區塊（` ``` `、`~~~`）與行內程式碼完全不處理。
 - **網域判斷以「渲染後」的網址為準**：先依 CommonMark 規則還原反斜線跳脫與字元實體，再判斷網域。例如 `https://允許網域\@evil.example` 渲染後會變成 `https://允許網域@evil.example`（真正的主機是 `evil.example`），會被正確移除。遠端網址只要含 `\`，或含無法安全解碼的字元實體，一律視為不安全。
 - **裸網址**：`allowedLinkHosts` 為白名單時，文字中不在白名單的裸網址（`https://…`、`www.…`）會被改寫成無法自動連結的形式（`hxxps://…`、`www[.]…`）。marked 預設的 GFM、markdown-it 的 `linkify` 會把這類文字自動變成連結，若不處理就會繞過 `allowedLinkHosts`。
+- **渲染器的模糊連結（無法由過濾器處理）**：markdown-it 開啟 `linkify` 時，預設的 `fuzzyLink` 連沒有 `https://` 的網域文字（`evil.com/x`，甚至 `README.md`）都會變成連結。過濾器無法在不破壞正常文字的前提下處理，請在渲染器關閉：`md.linkify.set({ fuzzyLink: false })`，或乾脆不開 `linkify`。
+
+**安全渲染檢查清單**：`html: false`（或 DOMPurify）、markdown-it 不開 `linkify` 或關閉 `fuzzyLink`、CSP 設定 `img-src` 只允許自己的圖片網域。三者加上本過濾器，任何一層失手都還有其他層擋住。
 
 **SanitizeOutputOptions**
 
